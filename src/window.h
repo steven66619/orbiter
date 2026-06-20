@@ -73,6 +73,7 @@ private:
 
   uint64_t last_frame_ = 0;
   bool cursor_visible_ = true;
+  bool has_focus_ = false;
   uint64_t cursor_toggle_time_ = 0;
   uint64_t metrics_update_time_ = 0;
 

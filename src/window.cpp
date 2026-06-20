@@ -57,6 +57,13 @@ LauncherWindow::LauncherWindow()
   apps_ = load_applications_cached();
   filtered_ = apps_;
   show_metrics_ = config_->show_metrics;
+
+  // Pre-warm all app icons so first render is instant
+  std::vector<std::string> icon_names;
+  for (auto &app : apps_) {
+    if (!app.icon.empty()) icon_names.push_back(app.icon);
+  }
+  prewarm_all_icons(icon_names, 28);
 }
 
 LauncherWindow::~LauncherWindow() {
@@ -217,6 +224,20 @@ void LauncherWindow::setup_rendering() {
   back_cr_ = cairo_create(backbuf_);
 
   pango_ctx_ = pango_cairo_create_context(back_cr_);
+
+  // Pre-warm Pango fontconfig — force font loading before window maps
+  auto warmup_layout = [&](const char *desc, const char *text) {
+    auto *l = pango_cairo_create_layout(back_cr_);
+    auto *fd = pango_font_description_from_string(desc);
+    pango_layout_set_font_description(l, fd);
+    pango_font_description_free(fd);
+    pango_layout_set_text(l, text, -1);
+    pango_cairo_show_layout(back_cr_, l);
+    g_object_unref(l);
+  };
+  warmup_layout("Sans 14", "w");
+  warmup_layout("Sans Bold 12", "w");
+  warmup_layout("Sans 10", "w");
 }
 
 // ── Main Loop ───────────────────────────────────────────────────────
@@ -229,6 +250,10 @@ void LauncherWindow::run() {
   // Fallback: force input focus directly
   xcb_set_input_focus(conn_, XCB_INPUT_FOCUS_PARENT, win_, XCB_CURRENT_TIME);
   xcb_flush(conn_);
+
+  // Render immediately — don't wait for EXPOSE event from compositor
+  compose();
+  flip();
 
   while (running_) {
     auto ev = xcb_poll_for_event(conn_);
@@ -262,11 +287,13 @@ void LauncherWindow::run() {
             pango_ctx_ = pango_cairo_create_context(back_cr_);
             dirty_ = true;
           }
+        } else if (type == XCB_FOCUS_IN) {
+          auto *fi = (xcb_focus_in_event_t *)ev;
+          if (fi->mode == XCB_NOTIFY_MODE_NORMAL)
+            has_focus_ = true;
         } else if (type == XCB_FOCUS_OUT) {
-          // Only close on focus-out if we've had focus for >100ms
-          // (avoids closing during initial map/focus handshake)
-          // Only close if we've had the window open >100ms
-          if (timestamp_ms() - last_frame_ > 100)
+          auto *fo = (xcb_focus_out_event_t *)ev;
+          if (has_focus_ && fo->mode == XCB_NOTIFY_MODE_NORMAL)
             running_ = false;
         }
         free(ev);
@@ -472,11 +499,9 @@ void LauncherWindow::update_filter() {
 // ── Composition (backbuffer) ────────────────────────────────────────
 
 void LauncherWindow::compose() {
-  // Paint background
   set_source_rgba(back_cr_, theme_->bg);
   cairo_paint(back_cr_);
 
-  // Border
   set_source_rgba(back_cr_, theme_->border);
   cairo_set_line_width(back_cr_, theme_->border_width);
   rounded_rect(back_cr_, 0.5, 0.5, width_ - 1, height_ - 1, theme_->border_radius);

@@ -7,11 +7,14 @@
 #include <iostream>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <cairo.h>
 #include <librsvg/rsvg.h>
 
 namespace runrs {
 namespace fs = std::filesystem;
+
+static std::unordered_map<std::string, std::string> icon_path_cache;
 
 static std::string to_lower(const std::string &s) {
   std::string r = s;
@@ -199,7 +202,62 @@ std::string lookup_fallback_icon(const std::string &name, int size) {
   return {};
 }
 
+static std::unordered_map<std::string, cairo_surface_t*> icon_cache;
+static std::unordered_map<std::string, IconTheme> theme_cache;
+
+static fs::path icon_cache_file() {
+  return fs::path(cache_dir()) / "icon_paths.cache";
+}
+
+static void load_path_cache() {
+  auto p = icon_cache_file();
+  if (!fs::exists(p)) return;
+  std::ifstream f(p, std::ios::binary);
+  if (!f.is_open()) return;
+  uint32_t n;
+  f.read(reinterpret_cast<char*>(&n), 4);
+  for (uint32_t i = 0; i < n; ++i) {
+    uint32_t klen, vlen;
+    f.read(reinterpret_cast<char*>(&klen), 4);
+    std::string key(klen, '\0');
+    f.read(&key[0], klen);
+    f.read(reinterpret_cast<char*>(&vlen), 4);
+    std::string val(vlen, '\0');
+    f.read(&val[0], vlen);
+    icon_path_cache[key] = val;
+  }
+}
+
+static void save_path_cache() {
+  auto p = icon_cache_file();
+  fs::create_directories(p.parent_path());
+  std::ofstream f(p, std::ios::binary);
+  if (!f.is_open()) return;
+  uint32_t n = (uint32_t)icon_path_cache.size();
+  f.write(reinterpret_cast<const char*>(&n), 4);
+  for (auto &[key, val] : icon_path_cache) {
+    uint32_t klen = (uint32_t)key.size();
+    uint32_t vlen = (uint32_t)val.size();
+    f.write(reinterpret_cast<const char*>(&klen), 4);
+    f.write(key.data(), klen);
+    f.write(reinterpret_cast<const char*>(&vlen), 4);
+    f.write(val.data(), vlen);
+  }
+}
+
+static std::string path_cache_key(const std::string &name, int size) {
+  return name + "@" + std::to_string(size);
+}
+
 cairo_surface_t *load_icon(const std::string &name, int size) {
+  static bool loaded = false;
+  if (!loaded) { load_path_cache(); loaded = true; }
+
+  std::string cache_key = name + ":" + std::to_string(size);
+  auto it = icon_cache.find(cache_key);
+  if (it != icon_cache.end()) {
+    return it->second ? cairo_surface_reference(it->second) : nullptr;
+  }
   if (name.empty()) return nullptr;
 
   // If it's already a path, load directly
@@ -215,48 +273,57 @@ cairo_surface_t *load_icon(const std::string &name, int size) {
       gboolean ok = rsvg_handle_render_document(handle, cr, &viewport, nullptr);
       cairo_destroy(cr);
       g_object_unref(handle);
-      if (ok) return surf;
+      if (ok) { icon_cache[cache_key] = surf; return cairo_surface_reference(surf); }
       cairo_surface_destroy(surf);
       return nullptr;
     }
     // PNG via cairo
-    return cairo_image_surface_create_from_png(name.c_str());
+    { cairo_surface_t *s = cairo_image_surface_create_from_png(name.c_str()); if (s) icon_cache[cache_key] = s; return s ? cairo_surface_reference(s) : nullptr; }
   }
 
   // Try XDG icon themes
   std::string path;
-
-  // Determine icon theme: GTK settings > XDG_CURSOR_THEME > hicolor
-  std::string theme_name = "hicolor";
-  auto try_gtk_theme = [&](const fs::path &ini) {
-    if (!fs::exists(ini)) return;
-    std::ifstream f(ini);
-    std::string l;
-    while (std::getline(f, l)) {
-      if (l.find("gtk-icon-theme-name") != std::string::npos) {
-        auto eq = l.find('=');
-        if (eq != std::string::npos) {
-          auto v = l.substr(eq + 1);
-          v = trim(v);
-          if (!v.empty()) theme_name = v;
+  std::string pkey = path_cache_key(name, size);
+  auto pit = icon_path_cache.find(pkey);
+  if (pit != icon_path_cache.end()) {
+    path = pit->second;
+  } else {
+    // Determine icon theme: GTK settings > XDG_CURSOR_THEME > hicolor
+    std::string theme_name = "hicolor";
+    auto try_gtk = [&](const fs::path &ini) {
+      if (!fs::exists(ini)) return;
+      std::ifstream f(ini);
+      std::string l;
+      while (std::getline(f, l)) {
+        if (l.find("gtk-icon-theme-name") != std::string::npos) {
+          auto eq = l.find('=');
+          if (eq != std::string::npos) {
+            auto v = trim(l.substr(eq + 1));
+            if (!v.empty()) theme_name = v;
+          }
         }
       }
+    };
+    const char *home = std::getenv("HOME");
+    if (home) {
+      try_gtk(fs::path(home) / ".config/gtk-3.0/settings.ini");
+      try_gtk(fs::path(home) / ".config/gtk-4.0/settings.ini");
     }
-  };
-  const char *home = std::getenv("HOME");
-  if (home) {
-    try_gtk_theme(fs::path(home) / ".config/gtk-3.0/settings.ini");
-    try_gtk_theme(fs::path(home) / ".config/gtk-4.0/settings.ini");
+    const char *cursor = std::getenv("XCURSOR_THEME");
+    if (cursor && cursor[0] && theme_name == "hicolor")
+      theme_name = cursor;
+
+    path = lookup_icon_in_theme(name, theme_name, size);
+    if (path.empty()) path = lookup_icon_in_theme(name, "hicolor", size);
+    if (path.empty()) path = lookup_fallback_icon(name, size);
+    icon_path_cache[pkey] = path;
+    save_path_cache();
   }
-  const char *cursor = std::getenv("XCURSOR_THEME");
-  if (cursor && cursor[0] && theme_name == "hicolor")
-    theme_name = cursor;
 
-  path = lookup_icon_in_theme(name, theme_name, size);
-  if (path.empty()) path = lookup_icon_in_theme(name, "hicolor", size);
-  if (path.empty()) path = lookup_fallback_icon(name, size);
-
-  if (path.empty()) return nullptr;
+  if (path.empty()) {
+    icon_cache[cache_key] = nullptr;
+    return nullptr;
+  }
 
   auto ext = fs::path(path).extension().string();
   if (ext == ".svg") {
@@ -268,12 +335,24 @@ cairo_surface_t *load_icon(const std::string &name, int size) {
     gboolean ok = rsvg_handle_render_document(handle, cr, &viewport, nullptr);
     cairo_destroy(cr);
     g_object_unref(handle);
-    if (ok) return surf;
+    if (ok) { icon_cache[cache_key] = surf; return cairo_surface_reference(surf); }
     cairo_surface_destroy(surf);
     return nullptr;
   }
 
-  return cairo_image_surface_create_from_png(path.c_str());
+  cairo_surface_t *surf = cairo_image_surface_create_from_png(path.c_str());
+  if (surf) icon_cache[cache_key] = surf;
+  return surf ? cairo_surface_reference(surf) : nullptr;
+}
+
+void prewarm_all_icons(const std::vector<std::string> &icon_names, int size) {
+  std::set<std::string> seen;
+  for (auto &name : icon_names) {
+    if (name.empty() || seen.count(name)) continue;
+    seen.insert(name);
+    cairo_surface_t *s = load_icon(name, size);
+    if (s) cairo_surface_destroy(s);
+  }
 }
 
 } // namespace runrs

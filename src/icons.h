@@ -21,6 +21,7 @@ struct IconTheme {
 };
 
 cairo_surface_t *load_icon(const std::string &name, int size = 48);
+void prewarm_all_icons(const std::vector<std::string> &icon_names, int size = 28);
 std::string lookup_icon_in_theme(const std::string &name, const std::string &theme, int size);
 std::string lookup_fallback_icon(const std::string &name, int size);
 std::vector<IconTheme> list_icon_themes();
