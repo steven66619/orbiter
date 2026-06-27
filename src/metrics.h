@@ -19,5 +19,6 @@ public:
 };
 
 std::pair<uint32_t, bool> get_power_status();
+double get_cpu_usage();
 
 } // namespace runrs

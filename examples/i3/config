@@ -1,0 +1,67 @@
+# i3 config for runrs launcher
+# Copy to ~/.config/i3/config or /etc/i3/config
+
+set $mod Mod4
+
+font pango:monospace 10
+
+# Run runrs as application launcher
+bindsym $mod+d exec --no-startup-id runrs
+
+# Basic navigation
+bindsym $mod+Return exec xterm
+bindsym $mod+Shift+q kill
+bindsym $mod+Shift+space floating toggle
+
+# Workspaces
+bindsym $mod+1 workspace 1
+bindsym $mod+2 workspace 2
+bindsym $mod+3 workspace 3
+bindsym $mod+4 workspace 4
+bindsym $mod+Shift+1 move container to workspace 1
+bindsym $mod+Shift+2 move container to workspace 2
+bindsym $mod+Shift+3 move container to workspace 3
+bindsym $mod+Shift+4 move container to workspace 4
+
+# Layout
+bindsym $mod+h split h
+bindsym $mod+v split v
+bindsym $mod+f fullscreen toggle
+
+# Focus
+bindsym $mod+j focus left
+bindsym $mod+k focus down
+bindsym $mod+l focus up
+bindsym $mod+semicolon focus right
+
+# Move
+bindsym $mod+Shift+j move left
+bindsym $mod+Shift+k move down
+bindsym $mod+Shift+l move up
+bindsym $mod+Shift+semicolon move right
+
+# Resize mode
+mode "resize" {
+  bindsym j resize shrink width 10 px
+  bindsym k resize grow height 10 px
+  bindsym l resize shrink height 10 px
+  bindsym semicolon resize grow width 10 px
+  bindsym Return mode default
+  bindsym Escape mode default
+  bindsym $mod+r mode default
+}
+bindsym $mod+r mode "resize"
+
+# Reload / restart
+bindsym $mod+Shift+c reload
+bindsym $mod+Shift+r restart
+
+# Startup
+exec --no-startup-id xrandr --auto
+exec --no-startup-id feh --bg-fill /usr/local/share/backgrounds/ghostbsd/default.png
+
+# Colors
+client.focused          #4c7899 #285577 #ffffff #2e9ef4
+client.focused_inactive #333333 #5f676a #ffffff #484e50
+client.unfocused        #333333 #222222 #888888 #292d2e
+client.urgent           #2f343a #900000 #ffffff #900000

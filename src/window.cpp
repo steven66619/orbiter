@@ -485,7 +485,7 @@ void LauncherWindow::launch_selected() {
     cleaned += entry.exec[i];
   }
 
-  launch_background(cleaned);
+  launch_background(cleaned, entry.stratum);
 }
 
 void LauncherWindow::update_filter() {
@@ -658,6 +658,7 @@ void LauncherWindow::compose_metrics() {
   static NetworkSpeedometer speedo;
   static auto last_update = timestamp_ms();
   static double rx = 0, tx = 0;
+  static double cpu = 0;
   static uint32_t cap = 0;
   static bool charging = false;
 
@@ -666,13 +667,14 @@ void LauncherWindow::compose_metrics() {
     auto s = speedo.calculate_speeds();
     rx = s.first;
     tx = s.second;
+    cpu = get_cpu_usage();
     auto p = get_power_status();
     cap = p.first;
     charging = p.second;
     last_update = now;
   }
 
-  int mx = width_ - 165, my = height_ - 48, mw = 155, mh = 42;
+  int mx = width_ - 165, my = height_ - 58, mw = 155, mh = 52;
 
   set_source_rgba(back_cr_, theme_->alt_bg);
   rounded_rect(back_cr_, mx, my, mw, mh, 5);
@@ -687,7 +689,14 @@ void LauncherWindow::compose_metrics() {
   snprintf(netbuf, sizeof(netbuf), "\xe2\x86\x93 %.1f \xe2\x86\x91 %.1f KB/s", rx, tx);
   pango_layout_set_text(layout, netbuf, -1);
   set_source_rgba(back_cr_, theme_->accent);
-  cairo_move_to(back_cr_, mx + 6, my + 4);
+  cairo_move_to(back_cr_, mx + 6, my + 2);
+  pango_cairo_show_layout(back_cr_, layout);
+
+  char cpubuf[24];
+  snprintf(cpubuf, sizeof(cpubuf), "CPU %.0f%%", cpu);
+  pango_layout_set_text(layout, cpubuf, -1);
+  set_source_rgba(back_cr_, theme_->text);
+  cairo_move_to(back_cr_, mx + 6, my + 20);
   pango_cairo_show_layout(back_cr_, layout);
 
   char battbuf[24];
@@ -697,7 +706,7 @@ void LauncherWindow::compose_metrics() {
   if (cap < 20) bc = {1.0, 0.2, 0.2, 1.0};
   else if (charging) bc = {0.2, 1.0, 0.2, 1.0};
   set_source_rgba(back_cr_, bc);
-  cairo_move_to(back_cr_, mx + 6, my + 22);
+  cairo_move_to(back_cr_, mx + 6, my + 38);
   pango_cairo_show_layout(back_cr_, layout);
 
   g_object_unref(layout);

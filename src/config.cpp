@@ -1,5 +1,7 @@
 #include "config.h"
+#include "platform_interface.h"
 #include "toml.h"
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -37,8 +39,17 @@ std::vector<std::string> data_dirs() {
       if (!d.empty()) dirs.push_back(d);
     }
   } else {
-    dirs.push_back("/usr/local/share");
-    dirs.push_back("/usr/share");
+    char pbuf[512];
+    if (get_icon_path(pbuf, sizeof(pbuf)) > 0) {
+      std::string d = fs::path(pbuf).parent_path().string();
+      if (std::find(dirs.begin(), dirs.end(), d) == dirs.end())
+        dirs.push_back(d);
+    }
+    if (get_app_path(pbuf, sizeof(pbuf)) > 0) {
+      std::string d = fs::path(pbuf).parent_path().string();
+      if (std::find(dirs.begin(), dirs.end(), d) == dirs.end())
+        dirs.push_back(d);
+    }
   }
   return dirs;
 }

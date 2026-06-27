@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(runrs
   VERSION 1.0.3
   DESCRIPTION "Application launcher with system icons"
-  LANGUAGES CXX
+  LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -23,6 +23,12 @@ pkg_check_modules(PANGO REQUIRED pangocairo)
 pkg_check_modules(RSVG REQUIRED librsvg-2.0)
 pkg_check_modules(XKBCOMMON REQUIRED xkbcommon xkbcommon-x11)
 
+if(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
+  set(PLATFORM_SRC src/platform_freebsd.c)
+else()
+  set(PLATFORM_SRC src/platform_linux.c)
+endif()
+
 add_executable(runrs
   src/main.cpp
   src/config.cpp
@@ -32,6 +38,7 @@ add_executable(runrs
   src/icons.cpp
   src/desktop.cpp
   src/window.cpp
+  ${PLATFORM_SRC}
 )
 
 target_include_directories(runrs PRIVATE

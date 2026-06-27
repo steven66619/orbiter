@@ -6,7 +6,7 @@
 
 namespace runrs {
 
-bool launch_background(const std::string &command) {
+bool launch_background(const std::string &command, const std::string &stratum) {
   auto trimmed = command;
   auto notspace = [](unsigned char c) { return !std::isspace(c); };
   auto start = std::find_if(trimmed.begin(), trimmed.end(), notspace);
@@ -20,7 +20,12 @@ bool launch_background(const std::string &command) {
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
-    execl("/bin/sh", "sh", "-c", trimmed.c_str(), nullptr);
+    if (!stratum.empty()) {
+      std::string inner = "exec " + trimmed;
+      execl("/bedrock/bin/strat", "strat", stratum.c_str(), "sh", "-c", inner.c_str(), nullptr);
+    } else {
+      execl("/bin/sh", "sh", "-c", trimmed.c_str(), nullptr);
+    }
     _exit(127);
   }
   return pid > 0;
