@@ -1,0 +1,1 @@
+clang++ main.cpp window.cpp $(pkg-config --cflags --libs xcb xcb-icccm xcb-keysyms xcb-util cairo xcb-render pangocairo pango harfbuzz gobject-2.0 glib-2.0 librsvg-2.0 gdk-pixbuf-2.0 gio-2.0) -o my_program

@@ -9,6 +9,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# --- FREEBSD PATH INJECTION START ---
+if(${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
+  # Direct compiler to the local header and library dirs
+  include_directories(/usr/local/include)
+  link_directories(/usr/local/lib)
+  
+  # Inject FreeBSD paths into the pkg-config environment so CMake modules find them
+  set(ENV{PKG_CONFIG_PATH} "/usr/local/libdata/pkgconfig:/usr/local/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+endif()
+# --- FREEBSD PATH INJECTION END ---
+
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(XCB REQUIRED
@@ -67,3 +78,4 @@ target_compile_options(runrs PRIVATE
 )
 
 install(TARGETS runrs DESTINATION bin)
+
