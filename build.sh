@@ -4,7 +4,7 @@ set -e
 case "$1" in
     --help|-h)
         echo "Usage: $0"
-        echo "  Builds Runrs (release)."
+        echo "  Builds Orbiter (release)."
         echo "  Use ./install.sh to install."
         exit 0 ;;
 esac

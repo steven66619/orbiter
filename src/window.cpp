@@ -24,9 +24,9 @@
 #include <cairo-xcb.h>
 #include <pango/pangocairo.h>
 
-namespace runrs {
+namespace orbiter {
 
-static const char *APP_NAME = "runrs";
+static const char *APP_NAME = "orbiter";
 
 static uint64_t timestamp_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -57,6 +57,7 @@ LauncherWindow::LauncherWindow()
   apps_ = load_applications_cached();
   filtered_ = apps_;
   show_metrics_ = config_->show_metrics;
+  recent_apps_ = load_recent_apps();
 
   // Pre-warm all app icons so first render is instant
   std::vector<std::string> icon_names;
@@ -125,6 +126,10 @@ void LauncherWindow::setup_atoms() {
   net_wm_desktop_ = intern_atom("_NET_WM_DESKTOP");
   net_wm_pid_ = intern_atom("_NET_WM_PID");
   net_active_window_ = intern_atom("_NET_ACTIVE_WINDOW");
+  clipboard_atom_ = intern_atom("CLIPBOARD");
+  targets_atom_ = intern_atom("TARGETS");
+  utf8_atom_ = intern_atom("text/plain;charset=utf-8");
+  text_atom_ = intern_atom("TEXT");
 }
 
 void LauncherWindow::setup_window() {
@@ -295,6 +300,28 @@ void LauncherWindow::run() {
           auto *fo = (xcb_focus_out_event_t *)ev;
           if (has_focus_ && fo->mode == XCB_NOTIFY_MODE_NORMAL)
             running_ = false;
+        } else if (type == XCB_SELECTION_REQUEST) {
+          auto *sr = (xcb_selection_request_event_t *)ev;
+          xcb_selection_notify_event_t reply{};
+          reply.response_type = XCB_SELECTION_NOTIFY;
+          reply.sequence = 0;
+          reply.time = XCB_CURRENT_TIME;
+          reply.requestor = sr->requestor;
+          reply.selection = sr->selection;
+          reply.target = sr->target;
+          reply.property = (sr->target == targets_atom_) ? sr->property : XCB_ATOM_NONE;
+          if (sr->target == targets_atom_) {
+            xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, sr->requestor,
+              sr->property, XCB_ATOM_ATOM, 32, 2, &utf8_atom_);
+          } else if (sr->target == utf8_atom_ || sr->target == text_atom_) {
+            if (!pending_copy_.empty()) {
+              xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, sr->requestor,
+                sr->property, utf8_atom_, 8, (uint32_t)pending_copy_.size(),
+                pending_copy_.c_str());
+            }
+          }
+          xcb_send_event(conn_, 0, sr->requestor, 0, (const char *)&reply);
+          xcb_flush(conn_);
         }
         free(ev);
       } while ((ev = xcb_poll_for_event(conn_)));
@@ -316,6 +343,15 @@ void LauncherWindow::run() {
 
       if (show_metrics_ && now - metrics_update_time_ > 1000) {
         metrics_update_time_ = now;
+        need_update = true;
+      }
+
+      // Smooth scroll animation
+      if (std::abs(scroll_visual_ - scroll_offset_) > 0.5) {
+        scroll_visual_ += (scroll_offset_ - scroll_visual_) * 0.3;
+        need_update = true;
+      } else if (scroll_visual_ != scroll_offset_) {
+        scroll_visual_ = scroll_offset_;
         need_update = true;
       }
 
@@ -407,6 +443,16 @@ void LauncherWindow::handle_key_press(uint32_t keycode, uint16_t mods) {
       }
       break;
 
+    case XK_c:
+      if (ctrl && !filtered_.empty()) {
+        auto &entry = filtered_[std::min(selection_, (int)filtered_.size() - 1)];
+        pending_copy_ = entry.exec;
+        xcb_set_selection_owner(conn_, win_, clipboard_atom_, XCB_CURRENT_TIME);
+        xcb_flush(conn_);
+        break;
+      }
+      [[fallthrough]];
+
     default: {
       char buf[8] = {};
       int len = 0;
@@ -486,14 +532,29 @@ void LauncherWindow::launch_selected() {
   }
 
   launch_background(cleaned, entry.stratum);
+  save_recent(cleaned);
 }
 
 void LauncherWindow::update_filter() {
   filtered_ = search_applications(apps_, input_);
   selection_ = 0;
   scroll_offset_ = 0;
+  scroll_visual_ = 0;
   if ((int)filtered_.size() > config_->max_results)
     filtered_.resize(config_->max_results);
+}
+
+void LauncherWindow::save_recent(const std::string &exec) {
+  // Remove if already in recent
+  recent_apps_.erase(
+    std::remove(recent_apps_.begin(), recent_apps_.end(), exec),
+    recent_apps_.end());
+  // Add to front
+  recent_apps_.insert(recent_apps_.begin(), exec);
+  // Keep max 5
+  if ((int)recent_apps_.size() > 5)
+    recent_apps_.resize(5);
+  save_recent_apps(recent_apps_);
 }
 
 // ── Composition (backbuffer) ────────────────────────────────────────
@@ -559,8 +620,34 @@ void LauncherWindow::compose_results() {
   int ih = 42, sy = 46;
   int max_visible = (height_ - sy - 4) / ih;
 
+  // Build display list: recent (if input empty) → pinned → filtered
+  std::vector<const DesktopEntry*> display;
+  if (input_.empty()) {
+    // Recent apps first
+    for (auto &r : recent_apps_) {
+      for (auto &app : apps_) {
+        if (app.exec == r) { display.push_back(&app); break; }
+      }
+    }
+    // Pinned apps
+    for (auto &pin : config_->pinned_apps) {
+      bool found = false;
+      for (auto *e : display) if (e->display_name() == pin) { found = true; break; }
+      if (!found) {
+        for (auto &app : apps_) {
+          if (app.display_name() == pin) { display.push_back(&app); break; }
+        }
+      }
+    }
+    if (display.empty()) {
+      for (auto &app : apps_) display.push_back(&app);
+    }
+  } else {
+    for (auto &e : filtered_) display.push_back(&e);
+  }
+
   // Clamp scroll
-  int n = (int)filtered_.size();
+  int n = (int)display.size();
   int max_offset = std::max(0, n - max_visible);
   scroll_offset_ = std::clamp(scroll_offset_, 0, max_offset);
 
@@ -569,7 +656,9 @@ void LauncherWindow::compose_results() {
 
   for (int i = 0; i < vis; ++i) {
     int idx = scroll_offset_ + i;
-    compose_entry(idx, sy + i * ih, idx == selection_);
+    if (display[idx]) {
+      compose_entry_ptr(*display[idx], sy + i * ih, idx == selection_);
+    }
   }
 
   // Scroll arrows
@@ -594,7 +683,10 @@ void LauncherWindow::compose_results() {
 }
 
 void LauncherWindow::compose_entry(int index, int y, bool hovered) {
-  auto &entry = filtered_[index];
+  compose_entry_ptr(filtered_[index], y, hovered);
+}
+
+void LauncherWindow::compose_entry_ptr(const DesktopEntry &entry, int y, bool hovered) {
   int ix = 8, iw = width_ - 16, ih = 40;
 
   set_source_rgba(back_cr_, hovered ? theme_->hover_bg : theme_->alt_bg);
@@ -709,7 +801,15 @@ void LauncherWindow::compose_metrics() {
   cairo_move_to(back_cr_, mx + 6, my + 38);
   pango_cairo_show_layout(back_cr_, layout);
 
+  // App count
+  char appbuf[32];
+  snprintf(appbuf, sizeof(appbuf), "%d apps", (int)apps_.size());
+  pango_layout_set_text(layout, appbuf, -1);
+  set_source_rgba(back_cr_, theme_->text);
+  cairo_move_to(back_cr_, mx + 60, my + 38);
+  pango_cairo_show_layout(back_cr_, layout);
+
   g_object_unref(layout);
 }
 
-} // namespace runrs
+} // namespace orbiter

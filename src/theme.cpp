@@ -8,7 +8,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace runrs {
+namespace orbiter {
 namespace fs = std::filesystem;
 
 Rgba hex_to_rgba(const std::string &hex) {
@@ -132,4 +132,4 @@ Theme load_theme() {
   return Theme::default_theme();
 }
 
-} // namespace runrs
+} // namespace orbiter

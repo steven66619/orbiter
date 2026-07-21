@@ -9,7 +9,7 @@
 #include <sstream>
 #include <vector>
 
-namespace runrs {
+namespace orbiter {
 namespace fs = std::filesystem;
 
 static std::string trim(const std::string &s) {
@@ -357,23 +357,75 @@ std::vector<DesktopEntry> search_applications(const std::vector<DesktopEntry> &a
                                                const std::string &query) {
   if (query.empty()) return apps;
 
-  std::vector<DesktopEntry> results;
   auto q = to_lower(trim(query));
+
+  // Category filter: @dev, @media, @system, etc
+  if (q.size() > 1 && q[0] == '@') {
+    auto tag = q.substr(1);
+    std::vector<DesktopEntry> results;
+    for (auto &app : apps) {
+      auto cats = to_lower(app.categories);
+      auto kw = to_lower(app.keywords);
+      if (cats.find(tag) != std::string::npos ||
+          kw.find(tag) != std::string::npos) {
+        results.push_back(app);
+      }
+    }
+    return results;
+  }
+
+  // Exact substring match first (fast path)
+  std::vector<DesktopEntry> exact;
+  std::vector<DesktopEntry> fuzzy;
 
   for (auto &app : apps) {
     auto name = to_lower(app.name);
     auto gn = to_lower(app.generic_name);
     auto exec = to_lower(app.exec);
+    auto kw = to_lower(app.keywords);
 
     if (name.find(q) != std::string::npos ||
         gn.find(q) != std::string::npos ||
         exec.find(q) != std::string::npos ||
+        kw.find(q) != std::string::npos ||
         to_lower(app.stratum).find(q) != std::string::npos) {
-      results.push_back(app);
+      exact.push_back(app);
+    } else {
+      // Fuzzy: Levenshtein distance against name
+      int dist = fuzzy_distance(name, q);
+      if (dist <= 3 || (int)q.size() <= 3 && dist <= 1) {
+        fuzzy.push_back(app);
+      }
     }
   }
 
-  return results;
+  // Exact matches first, then fuzzy sorted by distance
+  if (!fuzzy.empty()) {
+    auto q_lower = q;
+    std::sort(fuzzy.begin(), fuzzy.end(), [&](const DesktopEntry &a, const DesktopEntry &b) {
+      return fuzzy_distance(to_lower(a.name), q_lower) <
+             fuzzy_distance(to_lower(b.name), q_lower);
+    });
+    exact.insert(exact.end(), fuzzy.begin(), fuzzy.end());
+  }
+
+  return exact;
 }
 
-} // namespace runrs
+int fuzzy_distance(const std::string &a, const std::string &b) {
+  // Levenshtein distance
+  int na = (int)a.size(), nb = (int)b.size();
+  std::vector<int> prev(nb + 1), curr(nb + 1);
+  for (int j = 0; j <= nb; ++j) prev[j] = j;
+  for (int i = 1; i <= na; ++i) {
+    curr[0] = i;
+    for (int j = 1; j <= nb; ++j) {
+      int cost = (a[i-1] == b[j-1]) ? 0 : 1;
+      curr[j] = std::min({prev[j] + 1, curr[j-1] + 1, prev[j-1] + cost});
+    }
+    prev = curr;
+  }
+  return prev[nb];
+}
+
+} // namespace orbiter

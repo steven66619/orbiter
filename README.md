@@ -1,4 +1,4 @@
-# runrs
+# Orbiter
 
 A lightweight X11 application launcher with search, system icons, and
 Bedrock Linux cross-stratum support. Built with C++17, XCB, Cairo, and Pango.
@@ -51,7 +51,7 @@ make release
 sudo make install
 ```
 
-The binary is placed at `/usr/local/bin/runrs`.
+The binary is placed at `/usr/local/bin/orbiter`.
 
 ---
 
@@ -61,10 +61,10 @@ Bind to a key in your window manager:
 
 ```conf
 # Hyprland
-bind = SUPER, SPACE, exec, runrs
+bind = SUPER, SPACE, exec, orbiter
 
 # i3 / sway
-bindsym Mod4+space exec runrs
+bindsym Mod4+space exec orbiter
 ```
 
 - **Type** to filter applications
@@ -77,14 +77,14 @@ bindsym Mod4+space exec runrs
 
 ## Bedrock Linux
 
-runrs automatically detects Bedrock Linux strata and tags each app with its
+orbiter automatically detects Bedrock Linux strata and tags each app with its
 stratum name: `Firefox [fedora]`, `Alacritty [arch]`.
 
 ---
 
 ## Configuration
 
-Create `~/.config/Runrs/config.toml`:
+Create `~/.config/Orbiter/config.toml`:
 
 ```toml
 terminal = "foot"
@@ -92,7 +92,7 @@ max_results = 20
 show_metrics = true
 ```
 
-Theme colors can be customized in `~/.config/Runrs/config.toml`:
+Theme colors can be customized in `~/.config/Orbiter/config.toml`:
 
 ```toml
 bg_color = "#0b081a"

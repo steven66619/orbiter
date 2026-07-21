@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-namespace runrs {
+namespace orbiter {
 
 struct DesktopEntry {
   std::string filepath;
@@ -27,4 +27,6 @@ std::vector<DesktopEntry> load_applications_cached();
 std::vector<DesktopEntry> search_applications(const std::vector<DesktopEntry> &apps,
                                                const std::string &query);
 
-} // namespace runrs
+int fuzzy_distance(const std::string &a, const std::string &b);
+
+} // namespace orbiter

@@ -1,12 +1,12 @@
-# i3 config for runrs launcher
+# i3 config for orbiter launcher
 # Copy to ~/.config/i3/config or /etc/i3/config
 
 set $mod Mod4
 
 font pango:monospace 10
 
-# Run runrs as application launcher
-bindsym $mod+d exec --no-startup-id runrs
+# Run orbiter as application launcher
+bindsym $mod+d exec --no-startup-id orbiter
 
 # Basic navigation
 bindsym $mod+Return exec xterm

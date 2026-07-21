@@ -11,10 +11,10 @@ debug:
 	cmake --build $(BUILD_DIR) -j$(NPROCS)
 
 install: release
-	install -Dm755 $(BUILD_DIR)/runrs $(DESTDIR)$(PREFIX)/bin/runrs
+	install -Dm755 $(BUILD_DIR)/orbiter $(DESTDIR)$(PREFIX)/bin/orbiter
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/runrs
+	rm -f $(DESTDIR)$(PREFIX)/bin/orbiter
 
 clean:
 	rm -rf $(BUILD_DIR)

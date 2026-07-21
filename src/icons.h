@@ -3,7 +3,7 @@
 #include <vector>
 #include <cairo.h>
 
-namespace runrs {
+namespace orbiter {
 
 struct IconDir {
   std::string path;
@@ -26,4 +26,4 @@ std::string lookup_icon_in_theme(const std::string &name, const std::string &the
 std::string lookup_fallback_icon(const std::string &name, int size);
 std::vector<IconTheme> list_icon_themes();
 
-} // namespace runrs
+} // namespace orbiter

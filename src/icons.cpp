@@ -11,7 +11,7 @@
 #include <cairo.h>
 #include <librsvg/rsvg.h>
 
-namespace runrs {
+namespace orbiter {
 namespace fs = std::filesystem;
 
 static std::unordered_map<std::string, std::string> icon_path_cache;
@@ -317,7 +317,6 @@ cairo_surface_t *load_icon(const std::string &name, int size) {
     if (path.empty()) path = lookup_icon_in_theme(name, "hicolor", size);
     if (path.empty()) path = lookup_fallback_icon(name, size);
     icon_path_cache[pkey] = path;
-    save_path_cache();
   }
 
   if (path.empty()) {
@@ -353,6 +352,7 @@ void prewarm_all_icons(const std::vector<std::string> &icon_names, int size) {
     cairo_surface_t *s = load_icon(name, size);
     if (s) cairo_surface_destroy(s);
   }
+  save_path_cache();
 }
 
-} // namespace runrs
+} // namespace orbiter

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(runrs
+project(orbiter
   VERSION 1.0.3
   DESCRIPTION "Application launcher with system icons"
   LANGUAGES C CXX
@@ -40,7 +40,7 @@ else()
   set(PLATFORM_SRC src/platform_linux.c)
 endif()
 
-add_executable(runrs
+add_executable(orbiter
   src/main.cpp
   src/config.cpp
   src/theme.cpp
@@ -52,7 +52,7 @@ add_executable(runrs
   ${PLATFORM_SRC}
 )
 
-target_include_directories(runrs PRIVATE
+target_include_directories(orbiter PRIVATE
   ${XCB_INCLUDE_DIRS}
   ${CAIRO_INCLUDE_DIRS}
   ${PANGO_INCLUDE_DIRS}
@@ -61,7 +61,7 @@ target_include_directories(runrs PRIVATE
   src
 )
 
-target_link_libraries(runrs PRIVATE
+target_link_libraries(orbiter PRIVATE
   ${XCB_LIBRARIES}
   ${CAIRO_LIBRARIES}
   ${PANGO_LIBRARIES}
@@ -69,7 +69,7 @@ target_link_libraries(runrs PRIVATE
   ${XKBCOMMON_LIBRARIES}
 )
 
-target_compile_options(runrs PRIVATE
+target_compile_options(orbiter PRIVATE
   ${XCB_CFLAGS_OTHER}
   ${CAIRO_CFLAGS_OTHER}
   ${PANGO_CFLAGS_OTHER}
@@ -77,5 +77,5 @@ target_compile_options(runrs PRIVATE
   ${XKBCOMMON_CFLAGS_OTHER}
 )
 
-install(TARGETS runrs DESTINATION bin)
+install(TARGETS orbiter DESTINATION bin)
 

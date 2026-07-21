@@ -3,7 +3,7 @@
 #include <chrono>
 #include <utility>
 
-namespace runrs {
+namespace orbiter {
 
 class NetworkSpeedometer {
   uint64_t last_rx_ = 0;
@@ -21,4 +21,4 @@ public:
 std::pair<uint32_t, bool> get_power_status();
 double get_cpu_usage();
 
-} // namespace runrs
+} // namespace orbiter

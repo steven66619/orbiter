@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 
-namespace runrs {
+namespace orbiter {
 
 struct Rgba {
   double r{}, g{}, b{}, a{1.0};
@@ -27,4 +27,4 @@ std::string get_theme_file_name();
 
 Rgba hex_to_rgba(const std::string &hex);
 
-} // namespace runrs
+} // namespace orbiter

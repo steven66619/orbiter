@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-namespace runrs {
+namespace orbiter {
 
 bool launch_background(const std::string &command, const std::string &stratum) {
   auto trimmed = command;
@@ -31,4 +31,4 @@ bool launch_background(const std::string &command, const std::string &stratum) {
   return pid > 0;
 }
 
-} // namespace runrs
+} // namespace orbiter

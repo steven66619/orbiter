@@ -12,7 +12,7 @@
 
 typedef struct _PangoContext PangoContext;
 
-namespace runrs {
+namespace orbiter {
 
 struct Theme;
 struct DesktopEntry;
@@ -67,9 +67,17 @@ private:
   std::unique_ptr<Config> config_;
   int selection_ = 0;
   int scroll_offset_ = 0;
+  double scroll_visual_ = 0.0;
   bool running_ = true;
   bool dirty_ = true;
   bool show_metrics_ = false;
+
+  std::vector<std::string> recent_apps_;
+  std::string pending_copy_;
+  xcb_atom_t clipboard_atom_{};
+  xcb_atom_t targets_atom_{};
+  xcb_atom_t utf8_atom_{};
+  xcb_atom_t text_atom_{};
 
   uint64_t last_frame_ = 0;
   bool cursor_visible_ = true;
@@ -92,13 +100,15 @@ private:
   void compose_results();
   void compose_metrics();
   void compose_entry(int index, int y, bool hovered);
+  void compose_entry_ptr(const DesktopEntry &entry, int y, bool hovered);
 
   void launch_selected();
   void update_filter();
+  void save_recent(const std::string &exec);
 
   xcb_atom_t intern_atom(const std::string &name);
   void ewmh_set_cardinal(xcb_atom_t atom, uint32_t value);
 
 };
 
-} // namespace runrs
+} // namespace orbiter

@@ -7,19 +7,19 @@
 #include <fstream>
 #include <sstream>
 
-namespace runrs {
+namespace orbiter {
 namespace fs = std::filesystem;
 
 std::string config_dir() {
   const char *xdg = std::getenv("XDG_CONFIG_HOME");
   if (xdg && xdg[0]) {
-    return (fs::path(xdg) / "Runrs").string();
+    return (fs::path(xdg) / "Orbiter").string();
   }
   const char *home = std::getenv("HOME");
   if (home) {
-    return (fs::path(home) / ".config" / "Runrs").string();
+    return (fs::path(home) / ".config" / "Orbiter").string();
   }
-  return "./.config/Runrs";
+  return "./.config/Orbiter";
 }
 
 std::vector<std::string> data_dirs() {
@@ -57,13 +57,13 @@ std::vector<std::string> data_dirs() {
 std::string cache_dir() {
   const char *xdg = std::getenv("XDG_CACHE_HOME");
   if (xdg && xdg[0]) {
-    return (fs::path(xdg) / "runrs").string();
+    return (fs::path(xdg) / "orbiter").string();
   }
   const char *home = std::getenv("HOME");
   if (home) {
-    return (fs::path(home) / ".cache" / "runrs").string();
+    return (fs::path(home) / ".cache" / "orbiter").string();
   }
-  return "/tmp/runrs-cache";
+  return "/tmp/orbiter-cache";
 }
 
 Config load_config() {
@@ -83,7 +83,48 @@ Config load_config() {
   if (auto v = tbl.get("max_results")) {
     try { cfg.max_results = std::stoi(*v); } catch (...) {}
   }
+
+  // Load pinned apps from separate file
+  auto pinned_path = fs::path(config_dir()) / "pinned.txt";
+  if (fs::exists(pinned_path)) {
+    std::ifstream pf(pinned_path);
+    std::string line;
+    while (std::getline(pf, line)) {
+      auto trimmed = line;
+      auto s = trimmed.find_first_not_of(" \t");
+      auto e = trimmed.find_last_not_of(" \t");
+      if (s != std::string::npos && e != std::string::npos)
+        cfg.pinned_apps.push_back(trimmed.substr(s, e - s + 1));
+    }
+  }
+
   return cfg;
 }
 
-} // namespace runrs
+std::string recent_apps_file() {
+  return fs::path(cache_dir()) / "recent.txt";
+}
+
+void save_recent_apps(const std::vector<std::string> &recent) {
+  auto path = recent_apps_file();
+  fs::create_directories(fs::path(path).parent_path());
+  std::ofstream f(path);
+  for (auto &r : recent) f << r << "\n";
+}
+
+std::vector<std::string> load_recent_apps() {
+  std::vector<std::string> recent;
+  auto path = recent_apps_file();
+  if (!fs::exists(path)) return recent;
+  std::ifstream f(path);
+  std::string line;
+  while (std::getline(f, line)) {
+    auto s = line.find_first_not_of(" \t");
+    auto e = line.find_last_not_of(" \t");
+    if (s != std::string::npos && e != std::string::npos)
+      recent.push_back(line.substr(s, e - s + 1));
+  }
+  return recent;
+}
+
+} // namespace orbiter

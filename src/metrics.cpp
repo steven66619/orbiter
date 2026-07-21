@@ -4,7 +4,7 @@
 #include <sstream>
 #include <string>
 
-namespace runrs {
+namespace orbiter {
 
 bool NetworkSpeedometer::read_sys_bytes(uint64_t &rx, uint64_t &tx) {
   unsigned long long r = 0, t = 0;
@@ -62,4 +62,4 @@ double get_cpu_usage() {
   return ::get_cpu_usage();
 }
 
-} // namespace runrs
+} // namespace orbiter
