@@ -1,0 +1,43 @@
+# Orbiter configuration
+# Copy to ~/.config/Orbiter/config.toml (or $XDG_CONFIG_HOME/Orbiter/config.toml)
+# All keys are optional; defaults are shown below.
+
+# Terminal used to open "in terminal" entries / shell fallback.
+# terminal = "xterm"
+
+# File manager used for directory entries.
+# file_manager = "xdg-open"
+
+# Show the network & battery metrics widgets in the corner.
+# show_metrics = false
+
+# Maximum number of results shown in the launcher.
+# max_results = 30
+
+# --- Theme ---------------------------------------------------------------
+# Colors are 6-digit hex strings (#rrggbb). orbiter resolves them via:
+#   1. A DE/WM-specific file, e.g. hyprland.conf, sway.conf, i3.conf,
+#      bspwm.conf, xfce.conf, kde.conf, gnome.conf, river.conf, dwl.conf,
+#      qtile.conf, awesome.conf (picked from XDG_CURRENT_DESKTOP /
+#      DESKTOP_SESSION), else wayland.conf or x11.conf based on
+#      WAYLAND_DISPLAY;
+#   2. fallback to config.toml, then theme.toml.
+# Any of those files may use the keys below.
+
+# bg_color = "#0b081a"
+# text_color = "#ffffff"
+# accent_color = "#00e5ff"
+# alt_bg_color = "#151030"
+# hover_bg_color = "#201540"
+# input_bg_color = "#0d0a20"
+# border_color = "#2a2050"
+# border_radius = 8
+# border_width = 1
+
+# --- Pinned apps ---------------------------------------------------------
+# Apps pinned to the top of the results list are read from a separate file,
+# ~/.config/Orbiter/pinned.txt, one .desktop name (or exec basename) per line:
+#
+#   firefox.desktop
+#   foot
+#   alacritty.desktop
