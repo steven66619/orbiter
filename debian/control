@@ -1,0 +1,21 @@
+Source: orbiter
+Section: x11
+Priority: optional
+Maintainer: Steven Atkinson <steven4x4@gmail.com>
+Build-Depends: debhelper-compat (= 13), cmake, pkg-config, libxcb-icccm4-dev,
+ libxcb-keysyms1-dev, libxcb-util-dev, libcairo2-dev, libpango1.0-dev,
+ librsvg2-dev, libxkbcommon-x11-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/steven66619/orbiter
+
+Package: orbiter
+Architecture: any
+Maintainer: Steven Atkinson <steven4x4@gmail.com>
+Section: x11
+Priority: optional
+Homepage: https://github.com/steven66619/orbiter
+Depends: libcairo2, libpango-1.0-0, librsvg2-2, libxcb-icccm4,
+ libxcb-keysyms1, libxcb-aux0, libxkbcommon-x11-0
+Description: Application launcher with system icons
+ A lightweight X11 application launcher with system icon support,
+ built with CMake and rendered through cairo/pango.

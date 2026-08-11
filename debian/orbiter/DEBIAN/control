@@ -1,0 +1,12 @@
+Package: orbiter
+Architecture: amd64
+Maintainer: Steven Atkinson <steven4x4@gmail.com>
+Section: x11
+Priority: optional
+Homepage: https://github.com/steven66619/orbiter
+Depends: libcairo2, libpango-1.0-0, librsvg2-2, libxcb-icccm4,
+ libxcb-keysyms1, libxcb-aux0, libxkbcommon-x11-0
+Description: Application launcher with system icons
+ A lightweight X11 application launcher with system icon support,
+ built with CMake and rendered through cairo/pango.
+Version: 1.0.3-1

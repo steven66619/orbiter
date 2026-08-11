@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+
+# Build orbiter with CMake into the package staging dir.
+PREFIX = /usr
+
+clean:
+	rm -rf build-deb
+
+build:
+	cmake -S . -B build-deb -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$(PREFIX)
+	cmake --build build-deb -j"$$(nproc)"
+
+install: build
+	install -d $(CURDIR)/debian/orbiter/usr/bin
+	install -Dm755 build-deb/orbiter $(CURDIR)/debian/orbiter/usr/bin/orbiter
+
+# Substitute the host architecture for the binary stanza's `any` so the
+# resulting .deb is installable (dpkg rejects `Architecture: any` on binaries).
+ARCH := $(shell dpkg-architecture -qDEB_HOST_ARCH)
+
+binary-arch: install
+	mkdir -p $(CURDIR)/debian/orbiter/DEBIAN
+	awk '/^Package:/ {p=1} p' debian/control \
+	    | sed 's/^Architecture: any$$/Architecture: $(ARCH)/' \
+	    > $(CURDIR)/debian/orbiter/DEBIAN/control
+	sed -n 's/.*(\(.*\)).*/\1/p' debian/changelog | head -1 | \
+	    xargs -I{} echo "Version: {}" >> $(CURDIR)/debian/orbiter/DEBIAN/control
+	dpkg-deb --root-owner-group --build $(CURDIR)/debian/orbiter $(CURDIR)/..
+
+binary: binary-arch
+
+.PHONY: clean build install binary-arch binary
