@@ -1,3 +1,13 @@
+orbiter (1.0.3-2) unstable; urgency=medium
+
+  * Re-add keyboard grab retry so typing works when launched from a WM
+    keybinding.
+  * Guard against corrupt icon PNGs poisoning the cairo context, which froze
+    all repaints after the first frame.
+  * Depend on libxcb-util1 instead of the obsolete libxcb-aux0.
+
+ -- Steven Atkinson <steven4x4@gmail.com>  Fri, 14 Aug 2026 00:42:32 +0000
+
 orbiter (1.0.3-1) unstable; urgency=medium
 
   * Initial package.

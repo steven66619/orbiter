@@ -278,7 +278,17 @@ cairo_surface_t *load_icon(const std::string &name, int size) {
       return nullptr;
     }
     // PNG via cairo
-    { cairo_surface_t *s = cairo_image_surface_create_from_png(name.c_str()); if (s) icon_cache[cache_key] = s; return s ? cairo_surface_reference(s) : nullptr; }
+    {
+      cairo_surface_t *s = cairo_image_surface_create_from_png(name.c_str());
+      if (s) {
+        if (cairo_surface_status(s) == CAIRO_STATUS_SUCCESS) {
+          icon_cache[cache_key] = s;
+          return cairo_surface_reference(s);
+        }
+        cairo_surface_destroy(s);
+      }
+      return nullptr;
+    }
   }
 
   // Try XDG icon themes
@@ -340,8 +350,14 @@ cairo_surface_t *load_icon(const std::string &name, int size) {
   }
 
   cairo_surface_t *surf = cairo_image_surface_create_from_png(path.c_str());
-  if (surf) icon_cache[cache_key] = surf;
-  return surf ? cairo_surface_reference(surf) : nullptr;
+  if (surf) {
+    if (cairo_surface_status(surf) == CAIRO_STATUS_SUCCESS) {
+      icon_cache[cache_key] = surf;
+      return cairo_surface_reference(surf);
+    }
+    cairo_surface_destroy(surf);
+  }
+  return nullptr;
 }
 
 void prewarm_all_icons(const std::vector<std::string> &icon_names, int size) {

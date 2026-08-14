@@ -71,6 +71,7 @@ private:
   bool running_ = true;
   bool dirty_ = true;
   bool show_metrics_ = false;
+  bool keyboard_grabbed_ = false;
 
   std::vector<std::string> recent_apps_;
   std::string pending_copy_;
@@ -89,6 +90,8 @@ private:
   void setup_rendering();
   void setup_atoms();
   void center_window();
+  bool grab_keyboard();
+  bool try_grab_once();
 
   void handle_event();
   void handle_key_press(uint32_t keycode, uint16_t mods);

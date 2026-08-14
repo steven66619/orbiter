@@ -247,6 +247,26 @@ void LauncherWindow::setup_rendering() {
 
 // ── Main Loop ───────────────────────────────────────────────────────
 
+bool LauncherWindow::try_grab_once() {
+  if (keyboard_grabbed_) return true;
+  auto cookie = xcb_grab_keyboard(conn_, false, win_, XCB_CURRENT_TIME,
+    XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+  auto *reply = xcb_grab_keyboard_reply(conn_, cookie, nullptr);
+  bool grabbed = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
+  free(reply);
+  if (grabbed) {
+    keyboard_grabbed_ = true;
+  }
+  return grabbed;
+}
+
+bool LauncherWindow::grab_keyboard() {
+  // When launched from a WM keybinding (e.g. i3), the WM still holds its own
+  // grab until the key is released and has to reparent/map our window first.
+  // Retry from the main loop until the grab actually succeeds.
+  return try_grab_once();
+}
+
 void LauncherWindow::run() {
   last_frame_ = timestamp_ms();
   cursor_toggle_time_ = last_frame_;
@@ -259,6 +279,10 @@ void LauncherWindow::run() {
   // Render immediately — don't wait for EXPOSE event from compositor
   compose();
   flip();
+
+  // Grab the keyboard so typing works even if the WM keeps focus elsewhere.
+  // i3 must reparent/map the window first, so keep retrying in the loop.
+  grab_keyboard();
 
   while (running_) {
     auto ev = xcb_poll_for_event(conn_);
@@ -296,6 +320,9 @@ void LauncherWindow::run() {
           auto *fi = (xcb_focus_in_event_t *)ev;
           if (fi->mode == XCB_NOTIFY_MODE_NORMAL)
             has_focus_ = true;
+          if (!keyboard_grabbed_) try_grab_once();
+        } else if (type == XCB_MAP_NOTIFY) {
+          if (!keyboard_grabbed_) try_grab_once();
         } else if (type == XCB_FOCUS_OUT) {
           auto *fo = (xcb_focus_out_event_t *)ev;
           if (has_focus_ && fo->mode == XCB_NOTIFY_MODE_NORMAL)
@@ -359,6 +386,7 @@ void LauncherWindow::run() {
         compose();
         flip();
       } else {
+        if (!keyboard_grabbed_) try_grab_once();
         xcb_flush(conn_);
         usleep(8000);
       }
