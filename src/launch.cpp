@@ -1,7 +1,6 @@
 #include "launch.h"
 #include <algorithm>
 #include <cctype>
-#include <csignal>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -17,11 +16,7 @@ bool launch_background(const std::string &command, const std::string &stratum) {
 
   pid_t pid = fork();
   if (pid == 0) {
-    // Ignore SIGHUP so the child survives when the parent exits,
-    // but do NOT call setsid() — it detaches the process from the
-    // Wayland session, preventing GTK/Qt apps from connecting to the
-    // compositor display.
-    signal(SIGHUP, SIG_IGN);
+    setsid();
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
