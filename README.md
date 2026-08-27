@@ -1,7 +1,8 @@
 # Orbiter
 
-A lightweight X11 application launcher with search, system icons, and
-Bedrock Linux cross-stratum support. Built with C++17, XCB, Cairo, and Pango.
+A lightweight Wayland application launcher with search, system icons, and
+Bedrock Linux cross-stratum support. Built with C++17, Wayland (layer-shell),
+Cairo, and Pango.
 
 ---
 
@@ -23,24 +24,26 @@ Bedrock Linux cross-stratum support. Built with C++17, XCB, Cairo, and Pango.
 
 ## Dependencies
 
-| Package         | Debian / Ubuntu              |
-|-----------------|------------------------------|
-| xcb             | `libxcb-dev`                 |
-| xcb-icccm       | `libxcb-icccm4-dev`          |
-| xcb-keysyms     | `libxcb-keysyms1-dev`        |
-| xcb-aux         | `libxcb-util-dev`            |
-| cairo           | `libcairo2-dev`              |
-| pango           | `libpango1.0-dev`            |
-| librsvg         | `librsvg2-dev`               |
-| xkbcommon       | `libxkbcommon-dev`           |
+| Package           | Debian / Ubuntu              |
+|-------------------|------------------------------|
+| wayland-client    | `libwayland-dev`             |
+| wayland-protocols | `wayland-protocols`          |
+| cairo             | `libcairo2-dev`              |
+| pango             | `libpango1.0-dev`            |
+| librsvg           | `librsvg2-dev`               |
+| xkbcommon         | `libxkbcommon-dev`           |
 
 ### Quick install
 
 ```bash
 # Debian / Ubuntu
-sudo apt install libxcb-dev libxcb-icccm4-dev libxcb-keysyms1-dev \
-  libxcb-util-dev libcairo2-dev libpango1.0-dev librsvg2-dev libxkbcommon-dev
+sudo apt install libwayland-dev wayland-protocols libcairo2-dev \
+  libpango1.0-dev librsvg2-dev libxkbcommon-dev
 ```
+
+The build generates the `wlr-layer-shell-unstable-v1` and `xdg-shell` client
+code with `wayland-scanner` (shipped with `libwayland-dev`), so no extra
+protocol packages are needed.
 
 ---
 
@@ -57,13 +60,11 @@ The binary is placed at `/usr/local/bin/orbiter`.
 
 ## Usage
 
-Bind to a key in your window manager:
+Bind to a key in your Wayland compositor (requires a compositor with
+`wlr-layer-shell` support, e.g. sway):
 
 ```conf
-# Hyprland
-bind = SUPER, SPACE, exec, orbiter
-
-# i3 / sway
+# sway
 bindsym Mod4+space exec orbiter
 ```
 

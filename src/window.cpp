@@ -8,20 +8,22 @@
 
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <iostream>
 #include <sstream>
 #include <algorithm>
 #include <chrono>
 #include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <errno.h>
+#include <sys/mman.h>
+#include <sys/timerfd.h>
 
-#include <xcb/xcb.h>
-#include <xcb/xcb_aux.h>
-#include <xcb/xcb_icccm.h>
-#include <xcb/xcb_keysyms.h>
-#include <xcb/xproto.h>
-#include <X11/keysym.h>
+#include <wayland-client.h>
+#include "wlr-layer-shell-unstable-v1-client.h"
+#include <xkbcommon/xkbcommon.h>
 #include <cairo.h>
-#include <cairo-xcb.h>
 #include <pango/pangocairo.h>
 
 namespace orbiter {
@@ -49,6 +51,278 @@ static void rounded_rect(cairo_t *cr, double x, double y, double w, double h, do
   cairo_close_path(cr);
 }
 
+// ── Wayland listeners ────────────────────────────────────────────────
+
+// Forward declarations of listener structs (defined below) so the
+// registry/seat handlers can attach them.
+extern const wl_output_listener output_listener;
+extern const wl_pointer_listener pointer_listener;
+extern const wl_keyboard_listener keyboard_listener;
+
+void registry_handle_global(void *data, wl_registry *registry, uint32_t name,
+                                   const char *interface, uint32_t version) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (strcmp(interface, wl_compositor_interface.name) == 0) {
+    ws->compositor_ = static_cast<wl_compositor *>(
+      wl_registry_bind(registry, name, &wl_compositor_interface, 4));
+  } else if (strcmp(interface, wl_shm_interface.name) == 0) {
+    ws->shm_ = static_cast<wl_shm *>(
+      wl_registry_bind(registry, name, &wl_shm_interface, 1));
+  } else if (strcmp(interface, wl_seat_interface.name) == 0) {
+    ws->seat_ = static_cast<wl_seat *>(
+      wl_registry_bind(registry, name, &wl_seat_interface, 7));
+  } else if (strcmp(interface, wl_output_interface.name) == 0) {
+    ws->output_ = static_cast<wl_output *>(
+      wl_registry_bind(registry, name, &wl_output_interface, 3));
+    wl_output_add_listener(ws->output_, &output_listener, ws);
+  } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
+    ws->layer_shell_ = static_cast<zwlr_layer_shell_v1 *>(
+      wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1));
+  } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+    ws->data_device_manager_ = static_cast<wl_data_device_manager *>(
+      wl_registry_bind(registry, name, &wl_data_device_manager_interface, 3));
+  }
+}
+
+static void registry_handle_global_remove(void *data, wl_registry *registry,
+                                          uint32_t name) {}
+
+const wl_registry_listener registry_listener = {
+  registry_handle_global,
+  registry_handle_global_remove
+};
+
+static void output_handle_geometry(void *data, wl_output *output, int32_t x, int32_t y,
+                                   int32_t physical_width, int32_t physical_height,
+                                   int32_t subpixel, const char *make, const char *model,
+                                   int32_t transform) {}
+
+void output_handle_mode(void *data, wl_output *output, uint32_t flags,
+                               int32_t width, int32_t height, int32_t refresh) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (flags & WL_OUTPUT_MODE_CURRENT) {
+    ws->screen_width_ = width;
+    ws->screen_height_ = height;
+  }
+}
+
+static void output_handle_done(void *data, wl_output *output) {}
+void output_handle_scale(void *data, wl_output *output, int32_t factor) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->scale_ = factor;
+}
+
+const wl_output_listener output_listener = {
+  output_handle_geometry,
+  output_handle_mode,
+  output_handle_done,
+  output_handle_scale
+};
+
+void layer_surface_configure(void *data, zwlr_layer_surface_v1 *ls,
+                                    uint32_t serial, uint32_t w, uint32_t h) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  zwlr_layer_surface_v1_ack_configure(ls, serial);
+  if (w != 0 && h != 0) {
+    ws->width_ = w;
+    ws->height_ = h;
+  }
+  ws->configured_ = true;
+  ws->dirty_ = true;
+}
+
+void layer_surface_closed(void *data, zwlr_layer_surface_v1 *ls) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->running_ = false;
+}
+
+const zwlr_layer_surface_v1_listener layer_surface_listener = {
+  layer_surface_configure,
+  layer_surface_closed
+};
+
+static void buffer_release(void *data, wl_buffer *buffer) {
+  auto *buf = static_cast<ShmBuffer *>(data);
+  buf->busy = false;
+}
+
+const wl_buffer_listener buffer_listener = { buffer_release };
+
+void seat_capabilities(void *data, wl_seat *seat, uint32_t caps) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if ((caps & WL_SEAT_CAPABILITY_POINTER) && !ws->pointer_) {
+    ws->pointer_ = wl_seat_get_pointer(seat);
+    wl_pointer_add_listener(ws->pointer_, &pointer_listener, ws);
+  }
+  if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !ws->keyboard_) {
+    ws->keyboard_ = wl_seat_get_keyboard(seat);
+    wl_keyboard_add_listener(ws->keyboard_, &keyboard_listener, ws);
+  }
+}
+
+static void seat_name(void *data, wl_seat *seat, const char *name) {}
+
+const wl_seat_listener seat_listener = { seat_capabilities, seat_name };
+
+void keyboard_keymap(void *data, wl_keyboard *kb, uint32_t format,
+                            int fd, uint32_t size) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) { close(fd); return; }
+  char *map_str = static_cast<char *>(mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0));
+  if (map_str == MAP_FAILED) { close(fd); return; }
+  if (ws->xkb_keymap_) xkb_keymap_unref(ws->xkb_keymap_);
+  if (ws->xkb_state_) xkb_state_unref(ws->xkb_state_);
+  ws->xkb_keymap_ = xkb_keymap_new_from_string(ws->xkb_ctx_, map_str,
+    XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+  munmap(map_str, size);
+  close(fd);
+  if (!ws->xkb_keymap_) return;
+  ws->xkb_state_ = xkb_state_new(ws->xkb_keymap_);
+  ws->mod_ctrl_ = xkb_keymap_mod_get_index(ws->xkb_keymap_, XKB_MOD_NAME_CTRL);
+}
+
+void keyboard_enter(void *data, wl_keyboard *kb, uint32_t serial,
+                           wl_surface *surface, wl_array *keys) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->keyboard_entered_ = true;
+  ws->has_focus_ = true;
+  ws->last_serial_ = serial;
+}
+
+void keyboard_leave(void *data, wl_keyboard *kb, uint32_t serial,
+                           wl_surface *surface) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->keyboard_entered_ = false;
+  ws->has_focus_ = false;
+  ws->running_ = false; // dismiss when focus is lost
+}
+
+void keyboard_key(void *data, wl_keyboard *kb, uint32_t serial, uint32_t time,
+                         uint32_t key, uint32_t state) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (state != WL_KEYBOARD_KEY_STATE_PRESSED) return;
+  if (!ws->xkb_state_) return;
+  ws->last_serial_ = serial;
+  // wl_keyboard.key carries evdev keycodes, but the keymap sway sends is in
+  // the X11 keycode space (evdev + 8). Add 8 so keysyms/UTF-8 resolve
+  // correctly (wlroots does the same internally).
+  xkb_keysym_t sym = xkb_state_key_get_one_sym(ws->xkb_state_, key + 8);
+  ws->handle_key(sym, key + 8);
+}
+
+void keyboard_modifiers(void *data, wl_keyboard *kb, uint32_t serial,
+                               uint32_t mods_depressed, uint32_t mods_latched,
+                               uint32_t mods_locked, uint32_t group) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (ws->xkb_state_)
+    xkb_state_update_mask(ws->xkb_state_, mods_depressed, mods_latched,
+                          mods_locked, 0, 0, group);
+}
+
+static void keyboard_repeat_info(void *data, wl_keyboard *kb, int32_t rate,
+                                 int32_t delay) {}
+
+const wl_keyboard_listener keyboard_listener = {
+  keyboard_keymap,
+  keyboard_enter,
+  keyboard_leave,
+  keyboard_key,
+  keyboard_modifiers,
+  keyboard_repeat_info
+};
+
+void pointer_enter(void *data, wl_pointer *ptr, uint32_t serial,
+                          wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->pointer_entered_ = true;
+  ws->pointer_x_ = wl_fixed_to_int(sx);
+  ws->pointer_y_ = wl_fixed_to_int(sy);
+  ws->last_serial_ = serial;
+}
+
+void pointer_leave(void *data, wl_pointer *ptr, uint32_t serial,
+                          wl_surface *surface) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->pointer_entered_ = false;
+}
+
+void pointer_motion(void *data, wl_pointer *ptr, uint32_t time,
+                           wl_fixed_t sx, wl_fixed_t sy) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  ws->pointer_x_ = wl_fixed_to_int(sx);
+  ws->pointer_y_ = wl_fixed_to_int(sy);
+  ws->update_hover();
+}
+
+void pointer_button(void *data, wl_pointer *ptr, uint32_t serial, uint32_t time,
+                           uint32_t button, uint32_t state) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
+  ws->last_serial_ = serial;
+  if (button == 0x110) /* BTN_LEFT */
+    ws->handle_button_press(ws->pointer_x_, ws->pointer_y_);
+}
+
+void pointer_axis(void *data, wl_pointer *ptr, uint32_t time, uint32_t axis,
+                         wl_fixed_t value) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+  ws->handle_axis(wl_fixed_to_double(value));
+}
+
+static void pointer_frame(void *data, wl_pointer *ptr) {}
+static void pointer_axis_source(void *data, wl_pointer *ptr, uint32_t axis_source) {}
+static void pointer_axis_stop(void *data, wl_pointer *ptr, uint32_t time, uint32_t axis) {}
+static void pointer_axis_discrete(void *data, wl_pointer *ptr, uint32_t axis,
+                                  int32_t discrete) {}
+
+const wl_pointer_listener pointer_listener = {
+  pointer_enter,
+  pointer_leave,
+  pointer_motion,
+  pointer_button,
+  pointer_axis,
+  pointer_frame,
+  pointer_axis_source,
+  pointer_axis_stop,
+  pointer_axis_discrete
+};
+
+static void data_source_target(void *data, wl_data_source *src, const char *mime) {}
+void data_source_send(void *data, wl_data_source *src, const char *mime, int fd) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (strcmp(mime, "text/plain;charset=utf-8") == 0 ||
+      strcmp(mime, "text/plain") == 0) {
+    const std::string &text = ws->pending_copy_;
+    size_t off = 0;
+    while (off < text.size()) {
+      ssize_t n = write(fd, text.data() + off, text.size() - off);
+      if (n <= 0) break;
+      off += (size_t)n;
+    }
+  }
+  close(fd);
+}
+void data_source_cancelled(void *data, wl_data_source *src) {
+  auto *ws = static_cast<LauncherWindow *>(data);
+  if (ws->data_source_ == src) {
+    wl_data_source_destroy(src);
+    ws->data_source_ = nullptr;
+  }
+}
+static void data_source_dnd_drop_performed(void *data, wl_data_source *src) {}
+static void data_source_dnd_finished(void *data, wl_data_source *src) {}
+static void data_source_action(void *data, wl_data_source *src, uint32_t dnd_action) {}
+
+const wl_data_source_listener data_source_listener = {
+  data_source_target,
+  data_source_send,
+  data_source_cancelled,
+  data_source_dnd_drop_performed,
+  data_source_dnd_finished,
+  data_source_action
+};
+
 // ── Construction / Destruction ──────────────────────────────────────
 
 LauncherWindow::LauncherWindow()
@@ -68,169 +342,95 @@ LauncherWindow::LauncherWindow()
 }
 
 LauncherWindow::~LauncherWindow() {
-  if (keysyms_) xcb_key_symbols_free(keysyms_);
+  destroy_buffers();
+  if (data_source_) wl_data_source_destroy(data_source_);
+  if (data_device_) wl_data_device_release(data_device_);
+  if (keyboard_) wl_keyboard_release(keyboard_);
+  if (pointer_) wl_pointer_release(pointer_);
+  if (seat_) wl_seat_release(seat_);
+  if (layer_surface_) zwlr_layer_surface_v1_destroy(layer_surface_);
+  if (surface_) wl_surface_destroy(surface_);
+  if (layer_shell_) zwlr_layer_shell_v1_destroy(layer_shell_);
+  if (data_device_manager_) wl_data_device_manager_destroy(data_device_manager_);
+  if (output_) wl_output_release(output_);
+  if (compositor_) wl_compositor_destroy(compositor_);
+  if (shm_) wl_shm_destroy(shm_);
+  if (registry_) wl_registry_destroy(registry_);
+  if (xkb_state_) xkb_state_unref(xkb_state_);
+  if (xkb_keymap_) xkb_keymap_unref(xkb_keymap_);
+  if (xkb_ctx_) xkb_context_unref(xkb_ctx_);
   if (pango_ctx_) g_object_unref(pango_ctx_);
   if (back_cr_) cairo_destroy(back_cr_);
   if (backbuf_) cairo_surface_destroy(backbuf_);
-  if (cr_) cairo_destroy(cr_);
-  if (surface_) cairo_surface_destroy(surface_);
-  if (conn_) xcb_disconnect(conn_);
-}
-
-// ── XCB helpers ──────────────────────────────────────────────────────
-
-xcb_atom_t LauncherWindow::intern_atom(const std::string &name) {
-  auto reply = xcb_intern_atom_reply(conn_,
-    xcb_intern_atom(conn_, 0, name.size(), name.c_str()), nullptr);
-  return reply ? reply->atom : XCB_ATOM_NONE;
-}
-
-void LauncherWindow::ewmh_set_cardinal(xcb_atom_t atom, uint32_t value) {
-  xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, win_,
-    atom, XCB_ATOM_CARDINAL, 32, 1, &value);
+  if (display_) wl_display_disconnect(display_);
 }
 
 // ── Initialization ──────────────────────────────────────────────────
 
 bool LauncherWindow::init() {
-  int screen_num;
-  conn_ = xcb_connect(nullptr, &screen_num);
-  if (xcb_connection_has_error(conn_)) {
-    std::cerr << "Failed to connect to X server" << std::endl;
+  display_ = wl_display_connect(nullptr);
+  if (!display_) {
+    std::cerr << "Failed to connect to Wayland display" << std::endl;
     return false;
   }
 
-  screen_ = xcb_aux_get_screen(conn_, screen_num);
-  screen_width_ = screen_->width_in_pixels;
-  screen_height_ = screen_->height_in_pixels;
+  xkb_ctx_ = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  if (!xkb_ctx_) {
+    std::cerr << "Failed to create xkb context" << std::endl;
+    return false;
+  }
 
-  keysyms_ = xcb_key_symbols_alloc(conn_);
+  registry_ = wl_display_get_registry(display_);
+  wl_registry_add_listener(registry_, &registry_listener, this);
+  wl_display_roundtrip(display_);
 
-  setup_atoms();
-  setup_window();
+  if (!compositor_ || !shm_ || !layer_shell_ || !seat_) {
+    std::cerr << "Missing required Wayland globals (need compositor, shm, "
+                 "layer-shell, seat)" << std::endl;
+    return false;
+  }
+
+  wl_seat_add_listener(seat_, &seat_listener, this);
+  wl_display_roundtrip(display_);
+
+  setup_layer_surface();
   setup_rendering();
+  setup_clipboard();
+
+  // Wait for the compositor to configure the layer surface
+  wl_display_roundtrip(display_);
+  if (!configured_) {
+    std::cerr << "Layer surface was not configured" << std::endl;
+    return false;
+  }
 
   return true;
 }
 
-void LauncherWindow::setup_atoms() {
-  wm_delete_window_ = intern_atom("WM_DELETE_WINDOW");
-  wm_protocols_ = intern_atom("WM_PROTOCOLS");
-  net_wm_name_ = intern_atom("_NET_WM_NAME");
-  net_wm_window_type_ = intern_atom("_NET_WM_WINDOW_TYPE");
-  net_wm_window_type_dialog_ = intern_atom("_NET_WM_WINDOW_TYPE_DIALOG");
-  net_wm_state_ = intern_atom("_NET_WM_STATE");
-  net_wm_state_above_ = intern_atom("_NET_WM_STATE_ABOVE");
-  net_wm_state_sticky_ = intern_atom("_NET_WM_STATE_STICKY");
-  net_wm_state_modal_ = intern_atom("_NET_WM_STATE_MODAL");
-  net_wm_desktop_ = intern_atom("_NET_WM_DESKTOP");
-  net_wm_pid_ = intern_atom("_NET_WM_PID");
-  net_active_window_ = intern_atom("_NET_ACTIVE_WINDOW");
-  clipboard_atom_ = intern_atom("CLIPBOARD");
-  targets_atom_ = intern_atom("TARGETS");
-  utf8_atom_ = intern_atom("text/plain;charset=utf-8");
-  text_atom_ = intern_atom("TEXT");
-}
-
-void LauncherWindow::setup_window() {
-  width_ = 520;
-  height_ = 360;
-
-  win_ = xcb_generate_id(conn_);
-  uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-  uint32_t values[2] = {
-    screen_->black_pixel,
-    XCB_EVENT_MASK_EXPOSURE |
-    XCB_EVENT_MASK_KEY_PRESS |
-    XCB_EVENT_MASK_KEY_RELEASE |
-    XCB_EVENT_MASK_BUTTON_PRESS |
-    XCB_EVENT_MASK_POINTER_MOTION |
-    XCB_EVENT_MASK_STRUCTURE_NOTIFY |
-    XCB_EVENT_MASK_FOCUS_CHANGE
-  };
-  xcb_create_window(conn_, XCB_COPY_FROM_PARENT, win_, screen_->root,
-    0, 0, width_, height_, 0,
-    XCB_WINDOW_CLASS_INPUT_OUTPUT, screen_->root_visual,
-    mask, values);
-
-  xcb_icccm_set_wm_protocols(conn_, win_, wm_protocols_, 1, &wm_delete_window_);
-  xcb_icccm_set_wm_name(conn_, win_, XCB_ATOM_STRING, 8, 6, APP_NAME);
-  ewmh_set_cardinal(net_wm_pid_, getpid());
-
-  // Window type: dialog (not dock — docks steal input focus on many WMs)
-  xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, win_,
-    net_wm_window_type_, XCB_ATOM_ATOM, 32, 1, &net_wm_window_type_dialog_);
-
-  // Request above + sticky + modal
-  auto send_state = [&](xcb_atom_t state, bool add) {
-    xcb_client_message_event_t ev{};
-    ev.response_type = XCB_CLIENT_MESSAGE;
-    ev.window = win_;
-    ev.type = net_wm_state_;
-    ev.format = 32;
-    ev.data.data32[0] = add ? 1 : 0;
-    ev.data.data32[1] = state;
-    ev.data.data32[3] = 1;
-    xcb_send_event(conn_, 0, screen_->root,
-      XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-      (const char *)&ev);
-  };
-  send_state(net_wm_state_above_, true);
-  send_state(net_wm_state_sticky_, true);
-  send_state(net_wm_state_modal_, true);
-
-  uint32_t all_desktops = 0xFFFFFFFF;
-  ewmh_set_cardinal(net_wm_desktop_, all_desktops);
-
-  center_window();
-  xcb_map_window(conn_, win_);
-  xcb_flush(conn_);
-
-  // Request input focus via _NET_ACTIVE_WINDOW
-  xcb_client_message_event_t ev{};
-  ev.response_type = XCB_CLIENT_MESSAGE;
-  ev.window = screen_->root;
-  ev.type = net_active_window_;
-  ev.format = 32;
-  ev.data.data32[0] = 2; // pager hint
-  ev.data.data32[1] = 0; // timestamp (optional)
-  ev.data.data32[2] = win_;
-  xcb_send_event(conn_, 0, screen_->root,
-    XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-    (const char *)&ev);
-  xcb_flush(conn_);
-}
-
-void LauncherWindow::center_window() {
-  int x = (screen_width_ - width_) / 2;
-  int y = (screen_height_ - height_) / 3;
-  uint32_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
-                  XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
-  uint32_t values[] = {(uint32_t)std::max(0, x), (uint32_t)std::max(0, y),
-                       (uint32_t)width_, (uint32_t)height_};
-  xcb_configure_window(conn_, win_, mask, values);
+void LauncherWindow::setup_layer_surface() {
+  surface_ = wl_compositor_create_surface(compositor_);
+  layer_surface_ = zwlr_layer_shell_v1_get_layer_surface(layer_shell_, surface_,
+    nullptr, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, APP_NAME);
+  zwlr_layer_surface_v1_set_anchor(layer_surface_,
+    ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+    ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+    ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+  zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface_, true);
+  zwlr_layer_surface_v1_set_size(layer_surface_, width_, height_);
+  int top_margin = screen_height_ > 0 ? (screen_height_ - height_) / 3 : 0;
+  zwlr_layer_surface_v1_set_margin(layer_surface_, std::max(0, top_margin), 0, 0, 0);
+  zwlr_layer_surface_v1_add_listener(layer_surface_, &layer_surface_listener, this);
+  wl_surface_commit(surface_);
 }
 
 void LauncherWindow::setup_rendering() {
-  xcb_visualtype_t *visual = xcb_aux_find_visual_by_attrs(
-    screen_, -1, XCB_VISUAL_CLASS_TRUE_COLOR);
-  if (!visual) visual = xcb_aux_find_visual_by_attrs(
-    screen_, -1, XCB_VISUAL_CLASS_DIRECT_COLOR);
-  if (!visual) {
-    visual = xcb_aux_find_visual_by_id(screen_, screen_->root_visual);
-  }
-
-  // On-screen surface
-  surface_ = cairo_xcb_surface_create(conn_, win_, visual, width_, height_);
-  cr_ = cairo_create(surface_);
-
   // Backbuffer (off-screen image surface)
   backbuf_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width_, height_);
   back_cr_ = cairo_create(backbuf_);
 
   pango_ctx_ = pango_cairo_create_context(back_cr_);
 
-  // Pre-warm Pango fontconfig — force font loading before window maps
+  // Pre-warm Pango fontconfig — force font loading before first render
   auto warmup_layout = [&](const char *desc, const char *text) {
     auto *l = pango_cairo_create_layout(back_cr_);
     auto *fd = pango_font_description_from_string(desc);
@@ -245,120 +445,108 @@ void LauncherWindow::setup_rendering() {
   warmup_layout("Sans 10", "w");
 }
 
-// ── Main Loop ───────────────────────────────────────────────────────
+void LauncherWindow::setup_clipboard() {
+  if (data_device_manager_ && seat_)
+    data_device_ = wl_data_device_manager_get_data_device(data_device_manager_, seat_);
+}
 
-bool LauncherWindow::try_grab_once() {
-  if (keyboard_grabbed_) return true;
-  auto cookie = xcb_grab_keyboard(conn_, false, win_, XCB_CURRENT_TIME,
-    XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
-  auto *reply = xcb_grab_keyboard_reply(conn_, cookie, nullptr);
-  bool grabbed = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
-  free(reply);
-  if (grabbed) {
-    keyboard_grabbed_ = true;
+// ── Shm buffers ─────────────────────────────────────────────────────
+
+static int create_shm_fd(size_t size) {
+  char name[64];
+  for (int i = 0; i < 100; i++) {
+    snprintf(name, sizeof(name), "/wl_shm-%d-%d", getpid(), i);
+    int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0) {
+      shm_unlink(name);
+      if (ftruncate(fd, (off_t)size) == 0) return fd;
+      close(fd);
+      return -1;
+    }
   }
-  return grabbed;
+  return -1;
 }
 
-bool LauncherWindow::grab_keyboard() {
-  // When launched from a WM keybinding (e.g. i3), the WM still holds its own
-  // grab until the key is released and has to reparent/map our window first.
-  // Retry from the main loop until the grab actually succeeds.
-  return try_grab_once();
+bool LauncherWindow::create_buffer(ShmBuffer &buf, int width, int height) {
+  int stride = width * 4;
+  size_t size = (size_t)stride * (size_t)height;
+  int fd = create_shm_fd(size);
+  if (fd < 0) return false;
+
+  void *data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (data == MAP_FAILED) { close(fd); return false; }
+
+  wl_shm_pool *pool = wl_shm_create_pool(shm_, fd, (int32_t)size);
+  wl_buffer *buffer = wl_shm_pool_create_buffer(pool, 0, width, height,
+    stride, WL_SHM_FORMAT_ARGB8888);
+  wl_shm_pool_destroy(pool);
+  close(fd);
+
+  buf.buffer = buffer;
+  buf.data = data;
+  buf.size = size;
+  buf.width = width;
+  buf.height = height;
+  buf.busy = false;
+  wl_buffer_add_listener(buffer, &buffer_listener, &buf);
+  return true;
 }
+
+void LauncherWindow::destroy_buffers() {
+  for (auto &buf : buffers_) {
+    if (buf.buffer) wl_buffer_destroy(buf.buffer);
+    if (buf.data) munmap(buf.data, buf.size);
+    buf = ShmBuffer{};
+  }
+}
+
+// ── Main Loop ───────────────────────────────────────────────────────
 
 void LauncherWindow::run() {
   last_frame_ = timestamp_ms();
   cursor_toggle_time_ = last_frame_;
   metrics_update_time_ = last_frame_;
 
-  // Fallback: force input focus directly
-  xcb_set_input_focus(conn_, XCB_INPUT_FOCUS_PARENT, win_, XCB_CURRENT_TIME);
-  xcb_flush(conn_);
-
-  // Render immediately — don't wait for EXPOSE event from compositor
+  // Initial render
   compose();
-  flip();
+  render_frame();
 
-  // Grab the keyboard so typing works even if the WM keeps focus elsewhere.
-  // i3 must reparent/map the window first, so keep retrying in the loop.
-  grab_keyboard();
+  int timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+  if (timer_fd < 0) { running_ = false; return; }
+  struct itimerspec its = {};
+  its.it_interval.tv_nsec = 8000000; // 8 ms tick
+  its.it_value.tv_nsec = 8000000;
+  timerfd_settime(timer_fd, 0, &its, nullptr);
 
   while (running_) {
-    auto ev = xcb_poll_for_event(conn_);
-    if (ev) {
-      do {
-        uint8_t type = ev->response_type & ~0x80;
-        if (type == XCB_CLIENT_MESSAGE) {
-          auto *cm = (xcb_client_message_event_t *)ev;
-          if (cm->data.data32[0] == wm_delete_window_)
-            running_ = false;
-        } else if (type == XCB_EXPOSE) {
-          dirty_ = true;
-        } else if (type == XCB_KEY_PRESS) {
-          auto *kp = (xcb_key_press_event_t *)ev;
-          handle_key_press(kp->detail, kp->state);
-        } else if (type == XCB_BUTTON_PRESS) {
-          auto *bp = (xcb_button_press_event_t *)ev;
-          handle_button_press(bp->event_x, bp->event_y);
-        } else if (type == XCB_CONFIGURE_NOTIFY) {
-          auto *cn = (xcb_configure_notify_event_t *)ev;
-          if ((int)cn->width != width_ || (int)cn->height != height_) {
-            width_ = cn->width;
-            height_ = cn->height;
-            cairo_xcb_surface_set_size(surface_, width_, height_);
-            // Recreate backbuffer at new size
-            cairo_destroy(back_cr_);
-            cairo_surface_destroy(backbuf_);
-            backbuf_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width_, height_);
-            back_cr_ = cairo_create(backbuf_);
-            g_object_unref(pango_ctx_);
-            pango_ctx_ = pango_cairo_create_context(back_cr_);
-            dirty_ = true;
-          }
-        } else if (type == XCB_FOCUS_IN) {
-          auto *fi = (xcb_focus_in_event_t *)ev;
-          if (fi->mode == XCB_NOTIFY_MODE_NORMAL)
-            has_focus_ = true;
-          if (!keyboard_grabbed_) try_grab_once();
-        } else if (type == XCB_MAP_NOTIFY) {
-          if (!keyboard_grabbed_) try_grab_once();
-        } else if (type == XCB_FOCUS_OUT) {
-          auto *fo = (xcb_focus_out_event_t *)ev;
-          if (has_focus_ && fo->mode == XCB_NOTIFY_MODE_NORMAL)
-            running_ = false;
-        } else if (type == XCB_SELECTION_REQUEST) {
-          auto *sr = (xcb_selection_request_event_t *)ev;
-          xcb_selection_notify_event_t reply{};
-          reply.response_type = XCB_SELECTION_NOTIFY;
-          reply.sequence = 0;
-          reply.time = XCB_CURRENT_TIME;
-          reply.requestor = sr->requestor;
-          reply.selection = sr->selection;
-          reply.target = sr->target;
-          reply.property = (sr->target == targets_atom_) ? sr->property : XCB_ATOM_NONE;
-          if (sr->target == targets_atom_) {
-            xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, sr->requestor,
-              sr->property, XCB_ATOM_ATOM, 32, 2, &utf8_atom_);
-          } else if (sr->target == utf8_atom_ || sr->target == text_atom_) {
-            if (!pending_copy_.empty()) {
-              xcb_change_property(conn_, XCB_PROP_MODE_REPLACE, sr->requestor,
-                sr->property, utf8_atom_, 8, (uint32_t)pending_copy_.size(),
-                pending_copy_.c_str());
-            }
-          }
-          xcb_send_event(conn_, 0, sr->requestor, 0, (const char *)&reply);
-          xcb_flush(conn_);
-        }
-        free(ev);
-      } while ((ev = xcb_poll_for_event(conn_)));
+    int wl_fd = wl_display_get_fd(display_);
 
-      if (dirty_) {
-        compose();
-        flip();
-        dirty_ = false;
-      }
-    } else {
+    // Prepare read: flush pending requests, then drain any events that
+    // arrived before poll() so we never block on a stale fd.
+    while (wl_display_prepare_read(display_) != 0)
+      wl_display_dispatch_pending(display_);
+    wl_display_flush(display_);
+
+    struct pollfd fds[2] = {
+      {wl_fd, POLLIN, 0},
+      {timer_fd, POLLIN, 0},
+    };
+    int ret = poll(fds, 2, -1);
+    if (ret < 0) {
+      if (errno == EINTR) { wl_display_cancel_read(display_); continue; }
+      wl_display_cancel_read(display_);
+      break;
+    }
+
+    if (fds[0].revents & POLLIN)
+      wl_display_read_events(display_);
+    else
+      wl_display_cancel_read(display_);
+    wl_display_dispatch_pending(display_);
+
+    if (fds[1].revents & POLLIN) {
+      uint64_t exp;
+      read(timer_fd, &exp, sizeof(exp));
       auto now = timestamp_ms();
       bool need_update = false;
 
@@ -384,36 +572,81 @@ void LauncherWindow::run() {
 
       if (need_update) {
         compose();
-        flip();
-      } else {
-        if (!keyboard_grabbed_) try_grab_once();
-        xcb_flush(conn_);
-        usleep(8000);
+        render_frame();
       }
     }
   }
+
+  close(timer_fd);
+}
+
+// ── Rendering ───────────────────────────────────────────────────────
+
+void LauncherWindow::render_frame() {
+  if (!configured_ || !surface_) return;
+
+  // Pick a free buffer; skip the frame if both are still busy.
+  ShmBuffer *buf = nullptr;
+  for (int i = 0; i < 2; i++) {
+    if (!buffers_[i].busy) { buf = &buffers_[i]; break; }
+  }
+  if (!buf) return;
+
+  if (buf->width != width_ || buf->height != height_) {
+    if (buf->buffer) wl_buffer_destroy(buf->buffer);
+    if (buf->data) munmap(buf->data, buf->size);
+    *buf = ShmBuffer{};
+    if (!create_buffer(*buf, width_, height_)) return;
+  }
+
+  // Blit the backbuffer into the shm buffer
+  cairo_surface_t *shm_surf = cairo_image_surface_create_for_data(
+    static_cast<unsigned char *>(buf->data), CAIRO_FORMAT_ARGB32,
+    width_, height_, width_ * 4);
+  cairo_t *cr = cairo_create(shm_surf);
+  cairo_set_source_surface(cr, backbuf_, 0, 0);
+  cairo_paint(cr);
+  cairo_destroy(cr);
+  cairo_surface_destroy(shm_surf);
+
+  buf->busy = true;
+  wl_surface_attach(surface_, buf->buffer, 0, 0);
+  wl_surface_damage_buffer(surface_, 0, 0, width_, height_);
+  wl_surface_commit(surface_);
+}
+
+void LauncherWindow::compose() {
+  set_source_rgba(back_cr_, theme_->bg);
+  cairo_paint(back_cr_);
+
+  set_source_rgba(back_cr_, theme_->border);
+  cairo_set_line_width(back_cr_, theme_->border_width);
+  rounded_rect(back_cr_, 0.5, 0.5, width_ - 1, height_ - 1, theme_->border_radius);
+  cairo_stroke(back_cr_);
+
+  compose_input_field();
+  compose_results();
+  if (show_metrics_) compose_metrics();
 }
 
 // ── Input Handling ──────────────────────────────────────────────────
 
-void LauncherWindow::handle_key_press(uint32_t keycode, uint16_t mods) {
-  xcb_keysym_t sym = xcb_key_symbols_get_keysym(keysyms_, keycode, 0);
-  if (!sym) sym = xcb_key_symbols_get_keysym(keysyms_, keycode, 1);
-
-  bool ctrl = mods & XCB_MOD_MASK_CONTROL;
+void LauncherWindow::handle_key(xkb_keysym_t sym, uint32_t keycode) {
+  bool ctrl = xkb_state_ && xkb_state_mod_index_is_active(
+    xkb_state_, mod_ctrl_, XKB_STATE_MODS_EFFECTIVE);
 
   switch (sym) {
-    case XK_Return:
-    case XK_KP_Enter:
+    case XKB_KEY_Return:
+    case XKB_KEY_KP_Enter:
       launch_selected();
       running_ = false;
       break;
 
-    case XK_Escape:
+    case XKB_KEY_Escape:
       running_ = false;
       break;
 
-    case XK_BackSpace:
+    case XKB_KEY_BackSpace:
       if (!input_.empty()) {
         if (ctrl) {
           auto pos = input_.find_last_not_of(" ");
@@ -431,77 +664,58 @@ void LauncherWindow::handle_key_press(uint32_t keycode, uint16_t mods) {
       }
       break;
 
-    case XK_Up:
-    case XK_KP_Up:
+    case XKB_KEY_Up:
+    case XKB_KEY_KP_Up:
       if (selection_ > 0) --selection_;
       break;
 
-    case XK_Down:
-    case XK_KP_Down:
+    case XKB_KEY_Down:
+    case XKB_KEY_KP_Down:
       if (selection_ < (int)filtered_.size() - 1) ++selection_;
       break;
 
-    case XK_Page_Up:
-    case XK_KP_Page_Up: {
+    case XKB_KEY_Page_Up:
+    case XKB_KEY_KP_Page_Up: {
       int page = (height_ - 50) / 42;
       selection_ = std::max(0, selection_ - page);
       break;
     }
-    case XK_Page_Down:
-    case XK_KP_Page_Down: {
+    case XKB_KEY_Page_Down:
+    case XKB_KEY_KP_Page_Down: {
       int page = (height_ - 50) / 42;
       selection_ = std::min((int)filtered_.size() - 1, selection_ + page);
       break;
     }
 
-    case XK_Home:
-    case XK_KP_Home:
+    case XKB_KEY_Home:
+    case XKB_KEY_KP_Home:
       selection_ = 0;
       break;
 
-    case XK_End:
-    case XK_KP_End:
+    case XKB_KEY_End:
+    case XKB_KEY_KP_End:
       selection_ = (int)filtered_.size() - 1;
       break;
 
-    case XK_Tab:
+    case XKB_KEY_Tab:
       if (!filtered_.empty()) {
         input_ = filtered_[0].display_name();
         update_filter();
       }
       break;
 
-    case XK_c:
+    case XKB_KEY_c:
       if (ctrl && !filtered_.empty()) {
         auto &entry = filtered_[std::min(selection_, (int)filtered_.size() - 1)];
-        pending_copy_ = entry.exec;
-        xcb_set_selection_owner(conn_, win_, clipboard_atom_, XCB_CURRENT_TIME);
-        xcb_flush(conn_);
+        copy_to_clipboard(entry.exec);
         break;
       }
       [[fallthrough]];
 
     default: {
-      char buf[8] = {};
-      int len = 0;
-
-      if (sym >= 0x20 && sym <= 0x7E) {
-        buf[0] = (char)sym;
-        len = 1;
-      } else if (sym >= 0x0100 && sym < 0x10000) {
-        uint32_t uc = sym;
-        if (uc >= 0x0800) {
-          buf[0] = 0xE0 | ((uc >> 12) & 0x0F);
-          buf[1] = 0x80 | ((uc >> 6) & 0x3F);
-          buf[2] = 0x80 | (uc & 0x3F);
-          len = 3;
-        } else if (uc >= 0x0080) {
-          buf[0] = 0xC0 | ((uc >> 6) & 0x1F);
-          buf[1] = 0x80 | (uc & 0x3F);
-          len = 2;
-        }
-      }
-
+      if (!xkb_state_) break;
+      char buf[64];
+      int len = xkb_state_key_get_utf8(xkb_state_, keycode, buf, sizeof(buf));
       if (len > 0) {
         input_ += std::string(buf, len);
         update_filter();
@@ -534,6 +748,30 @@ void LauncherWindow::handle_button_press(int x, int y) {
     selection_ = index;
     launch_selected();
     running_ = false;
+  }
+}
+
+void LauncherWindow::handle_axis(double value) {
+  if (value > 0)
+    scroll_offset_ = std::min((int)filtered_.size() - 1, scroll_offset_ + 3);
+  else if (value < 0)
+    scroll_offset_ = std::max(0, scroll_offset_ - 3);
+  dirty_ = true;
+}
+
+void LauncherWindow::update_hover() {
+  int input_height = 44;
+  int item_height = 42;
+  int start_y = input_height + 4;
+
+  if (pointer_y_ < start_y) return;
+  int slot = (pointer_y_ - start_y) / item_height;
+  int index = scroll_offset_ + slot;
+  if (slot >= 0 && index >= 0 && index < (int)filtered_.size()) {
+    if (selection_ != index) {
+      selection_ = index;
+      dirty_ = true;
+    }
   }
 }
 
@@ -585,28 +823,18 @@ void LauncherWindow::save_recent(const std::string &exec) {
   save_recent_apps(recent_apps_);
 }
 
+void LauncherWindow::copy_to_clipboard(const std::string &text) {
+  if (!data_device_manager_ || !data_device_) return;
+  if (data_source_) wl_data_source_destroy(data_source_);
+  data_source_ = wl_data_device_manager_create_data_source(data_device_manager_);
+  wl_data_source_offer(data_source_, "text/plain;charset=utf-8");
+  wl_data_source_offer(data_source_, "text/plain");
+  wl_data_source_add_listener(data_source_, &data_source_listener, this);
+  pending_copy_ = text;
+  wl_data_device_set_selection(data_device_, data_source_, last_serial_);
+}
+
 // ── Composition (backbuffer) ────────────────────────────────────────
-
-void LauncherWindow::compose() {
-  set_source_rgba(back_cr_, theme_->bg);
-  cairo_paint(back_cr_);
-
-  set_source_rgba(back_cr_, theme_->border);
-  cairo_set_line_width(back_cr_, theme_->border_width);
-  rounded_rect(back_cr_, 0.5, 0.5, width_ - 1, height_ - 1, theme_->border_radius);
-  cairo_stroke(back_cr_);
-
-  compose_input_field();
-  compose_results();
-  if (show_metrics_) compose_metrics();
-}
-
-void LauncherWindow::flip() {
-  // Blit backbuffer to window in one shot
-  cairo_set_source_surface(cr_, backbuf_, 0, 0);
-  cairo_paint(cr_);
-  cairo_surface_flush(surface_);
-}
 
 void LauncherWindow::compose_input_field() {
   int fx = 10, fy = 6, fw = width_ - 20, fh = 34;
@@ -708,10 +936,6 @@ void LauncherWindow::compose_results() {
     draw_arrow(width_ - 14, sy + 3, true);
   if (scroll_offset_ + vis < n)
     draw_arrow(width_ - 14, end_y - 3, false);
-}
-
-void LauncherWindow::compose_entry(int index, int y, bool hovered) {
-  compose_entry_ptr(filtered_[index], y, hovered);
 }
 
 void LauncherWindow::compose_entry_ptr(const DesktopEntry &entry, int y, bool hovered) {
