@@ -1,8 +1,7 @@
 # Orbiter
 
-A lightweight Wayland application launcher with search, system icons, and
-Bedrock Linux cross-stratum support. Built with C++17, Wayland (layer-shell),
-Cairo, and Pango.
+A lightweight Wayland application launcher with search and system icons.
+Built with C++17, Wayland (layer-shell), Cairo, and Pango.
 
 ---
 
@@ -11,8 +10,6 @@ Cairo, and Pango.
 - **Fast search** — real-time filtering across desktop entry names, exec fields,
   and generic names as you type
 - **System icons** — full XDG Icon Theme Spec resolution (SVG via librsvg, PNG)
-- **Cross-distro launching** — searches Bedrock strata for apps; displays
-  `[stratum]` tags and runs commands in the correct environment
 - **Scrollable results** — keyboard navigation with arrows, page up/down,
   home/end; scroll arrows indicate off-screen entries
 - **Dark theme** — TOML-configurable colors with DE-aware auto-detection
@@ -73,13 +70,6 @@ bindsym Mod4+space exec orbiter
 - **Enter** to launch, **Esc** to dismiss
 - **Tab** to autocomplete from the first match
 - **Ctrl+Backspace** to delete the last word
-
----
-
-## Bedrock Linux
-
-orbiter automatically detects Bedrock Linux strata and tags each app with its
-stratum name: `Firefox [fedora]`, `Alacritty [arch]`.
 
 ---
 

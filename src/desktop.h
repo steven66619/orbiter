@@ -13,7 +13,6 @@ struct DesktopEntry {
   std::string exec;
   std::string categories;
   std::string keywords;
-  std::string stratum; // bedrock stratum, empty if not in a stratum
   bool no_display = false;
   bool hidden = false;
   bool startup_notify = true;

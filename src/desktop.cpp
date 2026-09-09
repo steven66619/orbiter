@@ -44,23 +44,9 @@ static std::string to_lower(const std::string &s) {
   return r;
 }
 
-// Extract bedrock stratum name from path, or empty string
-static std::string detect_stratum(const fs::path &path) {
-  auto p = path.lexically_normal().string();
-  // /bedrock/strata/<stratum>/usr/share/applications/...
-  auto marker = std::string("/bedrock/strata/");
-  auto pos = p.find(marker);
-  if (pos == std::string::npos) return {};
-  auto start = pos + marker.size();
-  auto end = p.find('/', start);
-  if (end == std::string::npos) return {};
-  return p.substr(start, end - start);
-}
-
 DesktopEntry parse_desktop_file(const fs::path &path) {
   DesktopEntry entry;
   entry.filepath = path.string();
-  entry.stratum = detect_stratum(path);
 
   std::ifstream f(path);
   if (!f.is_open()) return entry;
@@ -130,8 +116,6 @@ DesktopEntry parse_desktop_file(const fs::path &path) {
 
 std::string DesktopEntry::display_name() const {
   std::string n = name.empty() ? fs::path(filepath).stem().string() : name;
-  if (!stratum.empty())
-    n += " [" + stratum + "]";
   return n;
 }
 
@@ -139,7 +123,7 @@ std::string DesktopEntry::display_name() const {
 // Header: magic(4) ver(4) ndirs(4) [plen(4) path(plen) mtime(8)]*  nentries(4)
 // Entry:  plen(4) filepath(plen) ... (all strings length-prefixed) flags(1)
 static const uint32_t CACHE_MAGIC = 0x52554E52; // "RUNR"
-static const uint32_t CACHE_VER   = 1;
+static const uint32_t CACHE_VER   = 2;
 
 struct DirInfo {
   std::string path;
@@ -157,21 +141,6 @@ static std::vector<DirInfo> scan_dirs() {
     di.mtime = std::chrono::duration_cast<std::chrono::seconds>(
                  ft.time_since_epoch()).count();
     dirs.push_back(di);
-  }
-  // Also scan bedrock strata applications dirs
-  fs::path bedrock("/bedrock/strata");
-  if (fs::is_directory(bedrock)) {
-    for (auto &stratum : fs::directory_iterator(bedrock)) {
-      if (!stratum.is_directory()) continue;
-      auto apps = stratum.path() / "usr/share/applications";
-      if (!fs::is_directory(apps)) continue;
-      DirInfo di;
-      di.path = apps.lexically_normal().string();
-      auto ft = fs::last_write_time(apps);
-      di.mtime = std::chrono::duration_cast<std::chrono::seconds>(
-                   ft.time_since_epoch()).count();
-      dirs.push_back(di);
-    }
   }
   return dirs;
 }
@@ -239,7 +208,6 @@ static void write_cache(const std::vector<DirInfo> &dirs,
     writestr(e.exec);
     writestr(e.categories);
     writestr(e.keywords);
-    writestr(e.stratum);
     writestr(e.terminal);
 
     uint8_t flags = 0;
@@ -289,7 +257,6 @@ static std::vector<DesktopEntry> read_cache(const std::vector<DirInfo> &dirs,
     e.exec          = readstr();
     e.categories    = readstr();
     e.keywords      = readstr();
-    e.stratum       = readstr();
     e.terminal      = readstr();
     uint8_t flags = (uint8_t)read32();
     e.no_display    = flags & 1;
@@ -332,24 +299,6 @@ std::vector<DesktopEntry> load_applications() {
     }
   }
 
-  // Also scan bedrock strata
-  fs::path bedrock("/bedrock/strata");
-  if (fs::is_directory(bedrock)) {
-    for (auto &stratum : fs::directory_iterator(bedrock)) {
-      if (!stratum.is_directory()) continue;
-      auto apps_dir = stratum.path() / "usr/share/applications";
-      if (!fs::is_directory(apps_dir)) continue;
-      for (auto &entry : fs::recursive_directory_iterator(apps_dir)) {
-        if (!entry.is_regular_file()) continue;
-        if (entry.path().extension() != ".desktop") continue;
-        auto app = parse_desktop_file(entry.path());
-        if (app.hidden || app.no_display) continue;
-        if (app.exec.empty()) continue;
-        entries.push_back(std::move(app));
-      }
-    }
-  }
-
   return entries;
 }
 
@@ -387,8 +336,7 @@ std::vector<DesktopEntry> search_applications(const std::vector<DesktopEntry> &a
     if (name.find(q) != std::string::npos ||
         gn.find(q) != std::string::npos ||
         exec.find(q) != std::string::npos ||
-        kw.find(q) != std::string::npos ||
-        to_lower(app.stratum).find(q) != std::string::npos) {
+        kw.find(q) != std::string::npos) {
       exact.push_back(app);
     } else {
       // Fuzzy: Levenshtein distance against name

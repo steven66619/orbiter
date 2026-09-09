@@ -797,7 +797,7 @@ void LauncherWindow::launch_selected() {
     cleaned += entry.exec[i];
   }
 
-  launch_background(cleaned, entry.stratum);
+  launch_background(cleaned);
   save_recent(cleaned);
 }
 
