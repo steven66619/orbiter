@@ -38,8 +38,23 @@ inline Table parse(const std::string &content) {
   std::string section;
 
   while (std::getline(ss, line)) {
-    auto c = line.find('#');
-    if (c != std::string::npos) line = line.substr(0, c);
+    // Strip comments, but respect quoted strings so color values like
+    // "#RRGGBBAA" are not truncated at the '#'.
+    size_t comment = std::string::npos;
+    char quote_char = 0;
+    for (size_t i = 0; i < line.size(); ++i) {
+      char ch = line[i];
+      if (quote_char) {
+        if (ch == '\\') { ++i; continue; }
+        if (ch == quote_char) quote_char = 0;
+      } else if (ch == '"' || ch == '\'') {
+        quote_char = ch;
+      } else if (ch == '#') {
+        comment = i;
+        break;
+      }
+    }
+    if (comment != std::string::npos) line = line.substr(0, comment);
     line = trim(line);
     if (line.empty()) continue;
 
