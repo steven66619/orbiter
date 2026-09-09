@@ -3,6 +3,9 @@
 A lightweight Wayland application launcher with search and system icons.
 Built with C++17, Wayland (layer-shell), Cairo, and Pango.
 
+> **Note:** Bedrock Linux cross-stratum support was removed in 1.1.0. The
+> pre-removal code is preserved in the `bedrock` tag — `git checkout bedrock`.
+
 ---
 
 ## Features
